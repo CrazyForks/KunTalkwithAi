@@ -1,6 +1,11 @@
-import { db, type Conversation, type Message, type ApiConfig, type ConversationGroup, type ConversationSettings, type TextConversationSettings, type ImageConversationSettings } from '../db';
+import { db, type Conversation, type Message, type ApiConfig, type ConversationGroup, type ConversationSettings, type TextConversationSettings, type ImageConversationSettings, type Tombstone } from '../db';
 
 export const StorageService = {
+    async addTombstone(kind: Tombstone['kind'], targetId: string, deletedAt?: number) {
+        const ts = deletedAt ?? Date.now();
+        await db.tombstones.put({ kind, targetId, deletedAt: ts });
+    },
+
     // --- Conversations ---
     async createConversation(type: 'TEXT' | 'IMAGE', title?: string, id?: string): Promise<string> {
         const finalId = id || Date.now().toString();
@@ -47,6 +52,7 @@ export const StorageService = {
 
     async deleteConversation(id: string) {
         await db.transaction('rw', db.conversations, db.messages, db.conversationSettings, db.groups, async () => {
+            await this.addTombstone('conversation', id);
             await db.messages.where('conversationId').equals(id).delete();
             await db.conversationSettings.delete(id);
             await db.conversations.delete(id);
@@ -72,6 +78,10 @@ export const StorageService = {
 
             if (ids.length === 0) return;
 
+            for (const id of ids) {
+                await this.addTombstone('conversation', id);
+            }
+
             // Delete messages for these conversations
             await db.messages.where('conversationId').anyOf(ids).delete();
 
@@ -85,10 +95,10 @@ export const StorageService = {
             const groups = await db.groups.toArray();
             for (const g of groups) {
                 if (!Array.isArray(g.conversationIds)) continue;
-                
+
                 // Check if this group contains any of the deleted IDs
                 const newIds = g.conversationIds.filter(cid => !ids.includes(cid));
-                
+
                 // Only update if changes were made
                 if (newIds.length !== g.conversationIds.length) {
                     const updated: ConversationGroup = {
@@ -120,7 +130,8 @@ export const StorageService = {
             id,
             name: trimmed,
             conversationIds: [],
-            createdAt: now
+            createdAt: now,
+            updatedAt: now
         };
         await db.groups.add(group);
         return id;
@@ -133,10 +144,11 @@ export const StorageService = {
         const existingByName = await db.groups.where('name').equals(trimmed).first();
         if (existingByName && existingByName.id !== groupId) return;
 
-        await db.groups.update(groupId, { name: trimmed });
+        await db.groups.update(groupId, { name: trimmed, updatedAt: Date.now() });
     },
 
     async deleteGroup(groupId: string): Promise<void> {
+        await this.addTombstone('group', groupId);
         await db.groups.delete(groupId);
     },
 
@@ -153,7 +165,8 @@ export const StorageService = {
                     if (!has) {
                         await db.groups.put({
                             ...g,
-                            conversationIds: [...ids, conversationId]
+                            conversationIds: [...ids, conversationId],
+                            updatedAt: Date.now()
                         } as ConversationGroup);
                     }
                     continue;
@@ -162,7 +175,8 @@ export const StorageService = {
                 if (exclusive && has) {
                     await db.groups.put({
                         ...g,
-                        conversationIds: ids.filter(cid => cid !== conversationId)
+                        conversationIds: ids.filter(cid => cid !== conversationId),
+                        updatedAt: Date.now()
                     } as ConversationGroup);
                 }
             }
@@ -177,7 +191,8 @@ export const StorageService = {
             if (!ids.includes(conversationId)) return;
             await db.groups.put({
                 ...g,
-                conversationIds: ids.filter(cid => cid !== conversationId)
+                conversationIds: ids.filter(cid => cid !== conversationId),
+                updatedAt: Date.now()
             } as ConversationGroup);
         });
     },
@@ -190,7 +205,8 @@ export const StorageService = {
                 if (!ids.includes(conversationId)) continue;
                 await db.groups.put({
                     ...g,
-                    conversationIds: ids.filter(cid => cid !== conversationId)
+                    conversationIds: ids.filter(cid => cid !== conversationId),
+                    updatedAt: Date.now()
                 } as ConversationGroup);
             }
         });
@@ -238,6 +254,7 @@ export const StorageService = {
     },
 
     async deleteMessage(id: string) {
+        await this.addTombstone('message', id);
         await db.messages.delete(id);
     },
 
@@ -255,10 +272,14 @@ export const StorageService = {
     },
 
     async saveApiConfig(config: ApiConfig) {
-        await db.apiConfigs.put(config);
+        await db.apiConfigs.put({
+            ...config,
+            updatedAt: Date.now(),
+        });
     },
 
     async deleteApiConfig(id: string) {
+        await this.addTombstone('apiConfig', id);
         await db.apiConfigs.delete(id);
     },
 
@@ -270,7 +291,7 @@ export const StorageService = {
                 .modify({ isDefault: false });
 
             // Set new default
-            await db.apiConfigs.update(id, { isDefault: true });
+            await db.apiConfigs.update(id, { isDefault: true, updatedAt: Date.now() });
         });
     },
 

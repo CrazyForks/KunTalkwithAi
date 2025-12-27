@@ -67,6 +67,7 @@ export interface ApiConfig {
     apiKey: string;
     models: string[]; // List of available models for this config
     channel?: 'OpenAI兼容' | 'Gemini';
+    updatedAt?: number;
     
     // Custom Tools (JSON String)
     toolsJson?: string;
@@ -81,6 +82,13 @@ export interface ConversationGroup {
     name: string;
     conversationIds: string[];
     createdAt: number;
+    updatedAt?: number;
+}
+
+export interface Tombstone {
+    kind: 'conversation' | 'message' | 'apiConfig' | 'group' | 'conversationSetting';
+    targetId: string;
+    deletedAt: number;
 }
 
 export interface TextConversationSettings {
@@ -125,6 +133,7 @@ export class EveryTalkDatabase extends Dexie {
     apiConfigs!: Table<ApiConfig>;
     groups!: Table<ConversationGroup>;
     conversationSettings!: Table<ConversationSettings>;
+    tombstones!: Table<Tombstone>;
 
     constructor() {
         super('EveryTalkDB');
@@ -204,6 +213,15 @@ export class EveryTalkDatabase extends Dexie {
                 modality: 'IMAGE',
                 isDefault: true
             });
+        });
+
+        this.version(6).stores({
+            conversations: 'id, type, createdAt, updatedAt, isPinned',
+            messages: 'id, conversationId, role, timestamp',
+            apiConfigs: 'id, provider, modality, updatedAt',
+            groups: 'id, name, updatedAt',
+            conversationSettings: 'conversationId, type, updatedAt',
+            tombstones: '[kind+targetId], deletedAt'
         });
 
         this.on('populate', this.populate.bind(this));

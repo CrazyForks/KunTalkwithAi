@@ -17,7 +17,6 @@ import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.PromptLeakGuard
 import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
-import com.android.everytalk.util.SyncManager
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -762,10 +761,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         contentStarted = true
                     )
                     
-                    // Send sync stream end
-                    val convId = if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value else stateHolder._currentConversationId.value
-                    SyncManager.sendStreamEnd(convId, aiMessageId, finalizedMessage)
-
                     // 🎯 同步流式消息到 messages 列表（一次性更新）
                     stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
                     logger.debug("Synced streaming message $aiMessageId to messages list")

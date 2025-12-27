@@ -1,12 +1,10 @@
 import React, { useMemo, useState, useRef } from 'react';
-import { MessageSquarePlus, Image, FileText, Search, PanelLeftClose, QrCode, Info, Trash2, ChevronRight, Pin, Plus, MoreVertical, Edit2, FolderInput, X } from 'lucide-react';
+import { MessageSquarePlus, Image, FileText, Search, PanelLeftClose, Info, Trash2, ChevronRight, Pin, Plus, MoreVertical, Edit2, FolderInput, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Popover } from './ui/Popover';
 import { Dialog } from './ui/Dialog';
-import { ConnectMobileDialog } from './dialogs/ConnectMobileDialog';
 import { AboutDialog } from './dialogs/AboutDialog';
 import { StorageService } from '../services/StorageService';
-import { syncService } from '../services/SyncService';
 import type { Conversation } from '../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { SessionManager } from '../lib/controllers/SessionManager';
@@ -100,27 +98,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState<string | null>(null);
   const [pendingAssignConversationId, setPendingAssignConversationId] = useState<string | null>(null);
-  const [showConnectMobile, setShowConnectMobile] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
-  const [isConnectedToMobile, setIsConnectedToMobile] = useState(false);
-
-  React.useEffect(() => {
-    const handleConnected = () => setIsConnectedToMobile(true);
-    const handleDisconnected = () => setIsConnectedToMobile(false);
-
-    syncService.on('connected', handleConnected);
-    syncService.on('peer_connected', handleConnected); // If distinct
-    syncService.on('disconnected', handleDisconnected);
-    syncService.on('peer_disconnected', handleDisconnected);
-
-    return () => {
-        syncService.off('connected', handleConnected);
-        syncService.off('peer_connected', handleConnected);
-        syncService.off('disconnected', handleDisconnected);
-        syncService.off('peer_disconnected', handleDisconnected);
-    };
-  }, []);
 
   // State for Search
   const [isSearchMode, setIsSearchMode] = useState(false);
@@ -613,23 +592,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
         <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => setShowConnectMobile(true)}
-            className="flex items-center space-x-3 text-gray-400 hover:text-white hover:bg-white/5 w-full px-3 py-2 rounded-lg transition-all duration-200 group relative"
-        >
-          <div className="relative">
-            <QrCode size={18} strokeWidth={2} className={`group-hover:text-white group-hover:scale-110 transition-transform duration-200 ${isConnectedToMobile ? 'text-green-500' : ''}`} />
-            {isConnectedToMobile && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-            )}
-          </div>
-          <div className="flex flex-col items-start">
-             <span className="text-sm font-medium">Web端同步</span>
-             {isConnectedToMobile && <span className="text-[10px] text-green-500/80 leading-none">已连接</span>}
-          </div>
-        </motion.button>
-        <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
             onClick={() => setShowAbout(true)}
             className="flex items-center space-x-3 text-gray-400 hover:text-white hover:bg-white/5 w-full px-3 py-2 rounded-lg transition-all duration-200 group"
         >
@@ -880,11 +842,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
             </div>
         </div>
     </Dialog>
-    
-    <ConnectMobileDialog
-        isOpen={showConnectMobile}
-        onClose={() => setShowConnectMobile(false)}
-    />
     </>
   );
 };

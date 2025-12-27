@@ -5,6 +5,7 @@ import { ImageGenerationScreen } from './components/ImageGenerationScreen';
 import { AnimatePresence, motion } from 'framer-motion';
 import { FileText, Image as ImageIcon, MessageSquarePlus, PanelLeftOpen, Search } from 'lucide-react';
 import { SessionManager } from './lib/controllers/SessionManager';
+import { AutoCloudSyncService } from './services/AutoCloudSyncService';
 
 function App() {
   const [activeView, setActiveView] = useState<'chat' | 'image'>('chat');
@@ -33,6 +34,10 @@ function App() {
     } catch {
       // ignore
     }
+  }, []);
+
+  useEffect(() => {
+    return AutoCloudSyncService.start();
   }, []);
 
   useEffect(() => {

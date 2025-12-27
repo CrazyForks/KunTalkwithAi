@@ -7,7 +7,7 @@ import { ImportExportDialog } from './ImportExportDialog';
 import { StorageService } from '../../services/StorageService';
 import { ImportExportService } from '../../services/ImportExportService';
 import { AuthService } from '../../services/AuthService';
-import { CloudSyncService } from '../../services/CloudSyncService';
+import { CloudSyncManager } from '../../services/CloudSyncManager';
 
 import { type ApiConfig } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -106,16 +106,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   const handleTestPull = async () => {
     setSyncBusy(true);
     try {
-      const data = await CloudSyncService.pull(0);
-      alert(
-        `sync/pull 成功\n` +
-          `conversations=${data.conversations?.length ?? 0}\n` +
-          `messages=${data.messages?.length ?? 0}\n` +
-          `apiConfigs=${data.apiConfigs?.length ?? 0}\n` +
-          `groups=${data.groups?.length ?? 0}\n` +
-          `conversationSettings=${data.conversationSettings?.length ?? 0}\n` +
-          `tombstones=${data.tombstones?.length ?? 0}`
-      );
+      const res = await CloudSyncManager.syncOnce();
+      alert(`云同步完成\n推送变更=${res.pushed}\n拉取时间戳=${res.pulledNow}`);
     } catch (e: any) {
       alert(`sync/pull 失败: ${e?.message ?? String(e)}`);
     } finally {

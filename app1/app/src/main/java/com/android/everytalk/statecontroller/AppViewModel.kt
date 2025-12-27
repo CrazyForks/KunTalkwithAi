@@ -73,7 +73,6 @@ import com.android.everytalk.statecontroller.controller.config.ConfigFacade
 import com.android.everytalk.statecontroller.controller.config.ProviderController
 import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.util.storage.IncrementalBackupManager
-import com.android.everytalk.util.SyncManager
 
 // Constructor changed: removed dataSource
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -586,8 +585,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        // Initialize buffer scope for StreamingBuffer operations
       stateHolder.initializeBufferScope(viewModelScope)
       
-      // Initialize SyncManager with PersistenceManager
-      SyncManager.init(persistenceManager)
+      // no-op
    }
     
     /**

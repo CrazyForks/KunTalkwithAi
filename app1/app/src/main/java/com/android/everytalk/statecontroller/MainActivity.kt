@@ -44,7 +44,6 @@ import com.android.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.android.everytalk.ui.screens.MainScreen.ChatScreen
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
-import com.android.everytalk.ui.screens.sync.ScanQrScreen
 import com.android.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
 
@@ -181,7 +180,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // 🎯 根据代码块滚动状态动态控制抽屉手势
+                        // 根据代码块滚动状态动态控制抽屉手势
                         val isCodeBlockScrolling by appViewModel.gestureManager.isCodeBlockScrolling.collectAsState()
                         
                         DismissibleNavigationDrawer(
@@ -327,10 +326,6 @@ class MainActivity : ComponentActivity() {
                                         )
                                     },
                                     onAboutClick = { appViewModel.showAboutDialog() },
-                                    onScanQrClick = {
-                                        coroutineScope.launch { appViewModel.drawerState.close() }
-                                        navController.navigate(Screen.SYNC_SCAN_SCREEN)
-                                    },
                                     onImageGenerationClick = {
                                         // 从文本模式切换到图像模式，显示 Toast
                                         appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
@@ -542,67 +537,24 @@ class MainActivity : ComponentActivity() {
                                       viewModel = appViewModel
                                   )
                               }
-                                composable(
-                                    route = Screen.SYNC_SCAN_SCREEN,
-                                    enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    },
-                                    exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    },
-                                    popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    },
-                                    popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    }
-                                ) {
-                                    ScanQrScreen(
-                                        onNavigateBack = { navController.popBackStack() },
-                                        onQrCodeDetected = { qrContent ->
-                                            android.util.Log.d("Sync", "Scanned QR: $qrContent")
-                                            // TODO: 连接到 SyncManager
-                                            // 暂时先弹个 Toast 证明扫到了
-                                            appViewModel.showSnackbar("已识别二维码: $qrContent")
-                                            navController.popBackStack()
-                                        }
-                                    )
-                                }
-                           }
-                       }
-               }
-           }
-       }
-   }
-    
+                            }
+                        }
+                    }
+
+            }
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         // 处理分享过来的内容（应用已在运行时）
         handleIncomingShareIntent(intent)
     }
-    
-    /**
-     * 处理系统分享过来的文本内容
-     * 支持两种方式：
-     * 1. 直接分享文本（EXTRA_TEXT）
-     * 2. 分享文本文件（EXTRA_STREAM）- 读取文件内容
-     */
+
     private fun handleIncomingShareIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
-        
+
         when {
             // 处理直接分享的文本
             intent.type == "text/plain" -> {
