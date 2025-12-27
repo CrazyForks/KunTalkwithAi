@@ -361,6 +361,9 @@ android {
         implementation(libs.androidx.credentials)
         implementation(libs.androidx.credentials.play.services.auth)
         implementation(libs.googleid)
+
+        // ===== DataStore =====
+        implementation("androidx.datastore:datastore-preferences:1.0.0")
         
         // ===== Hilt Dependency Injection =====
         // 暂不启用 - Kotlin 2.1.0 兼容性问题

@@ -240,22 +240,6 @@ fun SettingsScreen(
                     }
                 },
                 actions = {
-                    // 添加 Google 登录按钮 (临时放置)
-                    IconButton(
-                        onClick = {
-                            if (accessToken.isNullOrBlank()) {
-                                showGoogleSignInDialog = true
-                            } else {
-                                viewModel.signOut()
-                            }
-                        }
-                    ) {
-                        Icon(
-                            imageVector = androidx.compose.material.icons.Icons.Default.AccountCircle,
-                            contentDescription = "账号同步",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
                     IconButton(onClick = { showImportExportDialog = true }) {
                         Icon(
                             imageVector = Icons.Default.ImportExport,

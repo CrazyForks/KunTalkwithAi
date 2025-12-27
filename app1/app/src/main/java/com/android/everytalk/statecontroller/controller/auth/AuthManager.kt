@@ -12,6 +12,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.android.everytalk.BuildConfig
+import com.android.everytalk.data.DataClass.UserInfo
 
 import java.security.MessageDigest
 import java.util.UUID
@@ -24,18 +25,18 @@ class AuthManager(private val context: Context) {
     private val credentialManager = CredentialManager.create(context)
 
     /**
-     * 发起 Google 登录流程，获取 ID Token
-     * @return 成功时返回 Google ID Token，失败时抛出异常
+     * 发起 Google 登录流程，获取 ID Token 和 用户信息
+     * @return 成功时返回 Pair<ID Token, UserInfo>，失败时抛出异常
      */
-    suspend fun signInWithGoogle(): String = withContext(Dispatchers.IO) {
+    suspend fun signInWithGoogle(): Pair<String, UserInfo> = withContext(Dispatchers.IO) {
         throw IllegalStateException("AuthManager needs an Activity context to launch sign-in UI. Use signInWithGoogle(activity) instead.")
     }
 
     /**
      * 使用 Activity Context 发起登录
      */
-    suspend fun signInWithGoogle(activity: android.app.Activity): String {
-        suspend fun requestIdToken(autoSelect: Boolean): String {
+    suspend fun signInWithGoogle(activity: android.app.Activity): Pair<String, UserInfo> {
+        suspend fun requestIdToken(autoSelect: Boolean): Pair<String, UserInfo> {
             val serverClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID.trim()
             if (serverClientId.isBlank()) {
                 throw IllegalStateException("GOOGLE_WEB_CLIENT_ID is empty. Please set VITE_GOOGLE_WEB_CLIENT_ID in local.properties/CI env and rebuild.")
@@ -86,17 +87,30 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    private fun handleSignIn(result: GetCredentialResponse): String {
+    private fun handleSignIn(result: GetCredentialResponse): Pair<String, UserInfo> {
         val credential = result.credential
         return when (credential) {
             is GoogleIdTokenCredential -> {
-                credential.idToken
+                val userInfo = UserInfo(
+                    displayName = credential.displayName,
+                    email = credential.id, // GoogleIdTokenCredential 的 id 字段就是 email
+                    photoUrl = credential.profilePictureUri?.toString(),
+                    id = null // Google ID 通常在 token 载荷中，这里暂不提取，也不关键
+                )
+                Pair(credential.idToken, userInfo)
             }
 
             is androidx.credentials.CustomCredential -> {
                 if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     try {
-                        GoogleIdTokenCredential.createFrom(credential.data).idToken
+                        val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                        val userInfo = UserInfo(
+                            displayName = googleIdTokenCredential.displayName,
+                            email = googleIdTokenCredential.id,
+                            photoUrl = googleIdTokenCredential.profilePictureUri?.toString(),
+                            id = null
+                        )
+                        Pair(googleIdTokenCredential.idToken, userInfo)
                     } catch (e: Exception) {
                         Log.e("AuthManager", "Failed to parse GoogleIdTokenCredential", e)
                         throw e

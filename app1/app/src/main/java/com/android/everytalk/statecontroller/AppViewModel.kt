@@ -75,6 +75,8 @@ import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.util.storage.IncrementalBackupManager
 import com.android.everytalk.statecontroller.controller.auth.AuthManager
 import com.android.everytalk.statecontroller.controller.auth.AuthService
+import com.android.everytalk.statecontroller.controller.auth.GoogleUserInfoManager
+import com.android.everytalk.data.DataClass.UserInfo
 import com.android.everytalk.util.DeviceIdManager
 import com.android.everytalk.util.AuthTokenStore
 
@@ -84,9 +86,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val authManager by lazy { AuthManager(application.applicationContext) }
     private val authService by lazy { AuthService() }
     private val authTokenStore by lazy { AuthTokenStore(application.applicationContext) }
+    private val googleUserInfoManager by lazy { GoogleUserInfoManager(application.applicationContext) }
 
     private val _accessToken = MutableStateFlow<String?>(authTokenStore.getAccessToken())
     val accessToken: StateFlow<String?> = _accessToken.asStateFlow()
+
+    // 暴露 Google 用户信息 Flow
+    val userInfo: StateFlow<UserInfo?> = googleUserInfoManager.userInfo
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val json = Json {
         prettyPrint = true
@@ -856,18 +863,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun signInWithGoogle(activity: android.app.Activity, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
             try {
-                // 1. 获取 Google ID Token
-                val idToken = authManager.signInWithGoogle(activity)
+                // 1. 获取 Google ID Token 和 前端用户信息
+                val (idToken, frontendUserInfo) = authManager.signInWithGoogle(activity)
+                Log.d("AppViewModel", "Google Sign-In success. ID Token length: ${idToken.length}, Frontend UserInfo: $frontendUserInfo")
 
                 // 2. 获取 Device ID
                 val deviceId = DeviceIdManager.getDeviceId(getApplication())
 
-                // 3. 交换 Access Token
-                val accessToken = authService.exchangeGoogleIdToken(idToken, deviceId)
+                // 3. 交换 Access Token & User Info (后端可能也会返回 UserInfo)
+                val (accessToken, backendUserInfo) = authService.exchangeGoogleIdTokenAndGetUserInfo(idToken, deviceId)
+                Log.d("AppViewModel", "Exchange token success. accessToken length: ${accessToken.length}, backendUserInfo: $backendUserInfo")
 
                 // 4. 持久化并更新状态
                 authTokenStore.setAccessToken(accessToken)
                 _accessToken.value = accessToken
+                
+                // 优先使用后端返回的 UserInfo (通常更准确/包含更多信息)，如果后端没返回(如当前情况)，则使用前端提取的
+                val finalUserInfo = backendUserInfo ?: frontendUserInfo
+                
+                if (finalUserInfo != null) {
+                   googleUserInfoManager.saveUserInfo(finalUserInfo)
+                   Log.d("AppViewModel", "Saved UserInfo: $finalUserInfo")
+                } else {
+                   Log.w("AppViewModel", "UserInfo is null (both backend and frontend), skipping saveUserInfo")
+                }
 
                 withContext(Dispatchers.Main) {
                     onSuccess()
@@ -886,6 +905,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun signOut() {
         authTokenStore.clear()
         _accessToken.value = null
+        viewModelScope.launch {
+            googleUserInfoManager.clearUserInfo()
+        }
         showSnackbar("已退出登录")
     }
 

@@ -1,17 +1,19 @@
 import React, { useMemo, useState, useRef } from 'react';
-import { MessageSquarePlus, Image, FileText, Search, PanelLeftClose, Info, Trash2, ChevronRight, Pin, Plus, MoreVertical, Edit2, FolderInput, X } from 'lucide-react';
+import { MessageSquarePlus, Image, FileText, Search, PanelLeftClose, Trash2, ChevronRight, Pin, Plus, MoreVertical, Edit2, FolderInput, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Popover } from './ui/Popover';
 import { Dialog } from './ui/Dialog';
-import { AboutDialog } from './dialogs/AboutDialog';
+import { AccountDialog } from './dialogs/AccountDialog';
 import { StorageService } from '../services/StorageService';
 import type { Conversation } from '../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { SessionManager } from '../lib/controllers/SessionManager';
+import { AuthService } from '../services/AuthService';
 
 interface SidebarProps {
   activeView: 'chat' | 'image';
   setActiveView: (view: 'chat' | 'image') => void;
+
   onNewChat: () => void;
   onSelectConversation: (id: string) => void;
   onCollapse: () => void;
@@ -24,6 +26,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
   // Subscribe to SessionManager
   React.useEffect(() => {
       return SessionManager.getInstance().subscribe(setSessionState);
+  }, []);
+
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [isSignedIn, setIsSignedIn] = useState(AuthService.isSignedIn());
+  const [googleProfile, setGoogleProfile] = useState(AuthService.getGoogleProfile());
+
+  React.useEffect(() => {
+      const update = () => {
+          setIsSignedIn(AuthService.isSignedIn());
+          setGoogleProfile(AuthService.getGoogleProfile());
+      };
+
+      update();
+
+      const onAuthChanged = () => update();
+      window.addEventListener('everytalk-auth-changed', onAuthChanged);
+      return () => window.removeEventListener('everytalk-auth-changed', onAuthChanged);
   }, []);
 
   // Fetch conversations from DB
@@ -98,7 +117,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [showDeleteGroupConfirm, setShowDeleteGroupConfirm] = useState<string | null>(null);
   const [pendingAssignConversationId, setPendingAssignConversationId] = useState<string | null>(null);
-  const [showAbout, setShowAbout] = useState(false);
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
 
   // State for Search
@@ -178,6 +196,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
           <span className="text-sm font-medium">
             {activeView === 'chat' ? '新建会话' : '新建图像生成'}
           </span>
+        </motion.button>
+
+        <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setShowClearAllConfirm(true)}
+            className="flex items-center space-x-3 text-gray-400 hover:text-red-400 hover:bg-red-500/10 w-full px-3 py-2.5 rounded-lg transition-all duration-200 group hover:shadow-[0_0_15px_rgba(255,255,255,0.05)]"
+        >
+          <Trash2 size={18} strokeWidth={2} className="group-hover:text-red-400 group-hover:scale-110 transition-transform duration-200" />
+          <span className="text-sm font-medium">清空记录</span>
         </motion.button>
 
         {/* 动态按钮 2: 切换到另一种模式 */}
@@ -592,20 +620,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
         <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => setShowAbout(true)}
+            onClick={() => setIsAccountOpen(true)}
             className="flex items-center space-x-3 text-gray-400 hover:text-white hover:bg-white/5 w-full px-3 py-2 rounded-lg transition-all duration-200 group"
         >
-          <Info size={18} strokeWidth={2} className="group-hover:text-white group-hover:scale-110 transition-transform duration-200" />
-          <span className="text-sm font-medium">关于</span>
-        </motion.button>
-        <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => setShowClearAllConfirm(true)}
-            className="flex items-center space-x-3 text-gray-400 hover:text-red-400 hover:bg-red-500/10 w-full px-3 py-2 rounded-lg transition-all duration-200 group"
-        >
-          <Trash2 size={18} strokeWidth={2} className="group-hover:text-red-400 group-hover:scale-110 transition-transform duration-200" />
-          <span className="text-sm font-medium">清空记录</span>
+          {googleProfile?.picture ? (
+            <img
+              src={googleProfile.picture}
+              alt="avatar"
+              className="h-6 w-6 rounded-full object-cover border border-white/10"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="h-6 w-6 rounded-full bg-white/10 border border-white/10" />
+          )}
+          <span className="text-sm font-medium truncate">
+            {googleProfile?.name || (isSignedIn ? '已登录' : '登录')}
+          </span>
         </motion.button>
       </div>
     </div>
@@ -640,9 +670,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
         </div>
     </Dialog>
 
-    <AboutDialog
-        isOpen={showAbout}
-        onClose={() => setShowAbout(false)}
+    <AccountDialog
+        isOpen={isAccountOpen}
+        onClose={() => setIsAccountOpen(false)}
     />
 
     {/* Delete Confirm Dialog */}

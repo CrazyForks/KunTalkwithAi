@@ -44,6 +44,10 @@ import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.screens.MainScreen.drawer.* // 导入抽屉子包下的所有内容
 import kotlinx.coroutines.delay
+import coil3.compose.AsyncImage
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
 
@@ -88,6 +92,8 @@ fun AppDrawerContent(
     getFullTextForIndex: (Int) -> String,
     onAboutClick: () -> Unit,
     onImageGenerationClick: () -> Unit,
+    userInfo: com.android.everytalk.data.DataClass.UserInfo? = null,
+    onUserInfoClick: () -> Unit = {},
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     isImageGenerationMode: Boolean,
     expandedItemIndex: Int?, // 新增：展开项状态
@@ -865,42 +871,92 @@ fun AppDrawerContent(
                 }
             }
             Spacer(Modifier.height(16.dp)) // Add some space before the button
-            Button(
-                onClick = { onAboutClick() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .height(40.dp), // Slightly shorter height
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                    contentColor = MaterialTheme.colorScheme.onSurface
-                ),
-                elevation = ButtonDefaults.buttonElevation(
-                    defaultElevation = 0.dp,
-                    pressedElevation = 0.dp
-                ),
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Row(
+
+            if (userInfo != null) {
+                // 用户信息显示区域
+                Surface(
+                    onClick = onUserInfoClick,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start
+                        .padding(horizontal = 16.dp)
+                        .height(64.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    shadowElevation = 0.dp
                 ) {
-                    Icon(
-                        Icons.Filled.Info,
-                        "关于图标",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.width(20.dp))
-                    Text(
-                        "关于",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AsyncImage(
+                            model = userInfo.photoUrl,
+                            contentDescription = "User Avatar",
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = userInfo.displayName ?: "用户",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (!userInfo.email.isNullOrBlank()) {
+                                Text(
+                                    text = userInfo.email,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                // 原有的关于按钮
+                Button(
+                    onClick = { onUserInfoClick() }, // 未登录也跳转到设置页进行登录
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 0.dp
+                    ),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        Icon(
+                            Icons.Filled.AccountCircle,
+                            "登录图标",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.width(20.dp))
+                        Text(
+                            "登录 / 设置",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(16.dp))
