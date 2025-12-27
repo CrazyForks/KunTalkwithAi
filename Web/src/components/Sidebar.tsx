@@ -106,18 +106,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
   const [isConnectedToMobile, setIsConnectedToMobile] = useState(false);
 
   React.useEffect(() => {
-    const checkStatus = () => {
-        // Simple check if connected. Real app might want more granular state.
-        // Assuming syncService doesn't expose a boolean property directly yet,
-        // we might rely on the existing listeners or add a state tracker if needed.
-        // For now, let's just listen to events.
-    };
-
     const handleConnected = () => setIsConnectedToMobile(true);
     const handleDisconnected = () => setIsConnectedToMobile(false);
-
-    // Initial check (if SyncService exposed state, we'd use it)
-    // setIsConnectedToMobile(syncService.isConnected());
 
     syncService.on('connected', handleConnected);
     syncService.on('peer_connected', handleConnected); // If distinct

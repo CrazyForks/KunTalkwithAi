@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Download, Edit2, Brush, Undo, Redo, ChevronRight } from 'lucide-react';
+import { X, Download, Edit2, Brush, Undo, Redo } from 'lucide-react';
 
 interface ImageViewerProps {
     isOpen: boolean;
@@ -18,8 +18,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ isOpen, onClose, image
     const [isDrawing, setIsDrawing] = useState(false);
     const [history, setHistory] = useState<ImageData[]>([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
-    const [brushColor, setBrushColor] = useState('#82A8FF'); // Matches Android approx
-    const [brushSize, setBrushSize] = useState(24); // Matches Android approx
+    const brushColor = '#82A8FF'; // Matches Android approx
+    const brushSize = 24; // Matches Android approx
 
     // Reset state when opening
     useEffect(() => {

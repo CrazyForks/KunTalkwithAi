@@ -1,4 +1,4 @@
-import { ApiService, type ChatRequest, type StreamEvent } from '../../services/ApiService';
+import { ApiService, type ChatRequest } from '../../services/ApiService';
 import { StorageService } from '../../services/StorageService';
 import type { ApiConfig, Message, WebSearchResult } from '../../db';
 

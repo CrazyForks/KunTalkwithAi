@@ -234,9 +234,6 @@ function detectModelFamily(modelName: string, provider: string, address: string)
 
 export async function generateImage(opts: GenerateImageOptions): Promise<string[]> {
   const { config, referenceImages } = opts;
-  const modelLower = config.model.toLowerCase();
-  const providerLower = config.provider.toLowerCase();
-  const addressLower = config.address.toLowerCase();
 
   // Detect model family
   const family = detectModelFamily(config.model, config.provider, config.address);
