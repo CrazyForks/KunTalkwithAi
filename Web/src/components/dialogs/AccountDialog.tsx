@@ -143,16 +143,14 @@ export const AccountDialog: React.FC<AccountDialogProps> = ({ isOpen, onClose })
                 <div className="flex-1 overflow-y-auto px-4 py-4">
                   <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="flex items-center gap-3">
-                      {profile?.picture ? (
+                      {isSignedIn && profile?.picture ? (
                         <img
                           src={profile.picture}
                           alt="avatar"
                           className="h-14 w-14 rounded-full object-cover border border-white/10"
                           referrerPolicy="no-referrer"
                         />
-                      ) : (
-                        <div className="h-14 w-14 rounded-full bg-white/10 border border-white/10" />
-                      )}
+                      ) : null}
 
                       <div className="min-w-0 flex-1">
                         <div className="text-base font-bold text-white truncate">

@@ -623,16 +623,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onN
             onClick={() => setIsAccountOpen(true)}
             className="flex items-center space-x-3 text-gray-400 hover:text-white hover:bg-white/5 w-full px-3 py-2 rounded-lg transition-all duration-200 group"
         >
-          {googleProfile?.picture ? (
+          {isSignedIn && googleProfile?.picture ? (
             <img
               src={googleProfile.picture}
               alt="avatar"
               className="h-6 w-6 rounded-full object-cover border border-white/10"
               referrerPolicy="no-referrer"
             />
-          ) : (
-            <div className="h-6 w-6 rounded-full bg-white/10 border border-white/10" />
-          )}
+          ) : null}
           <span className="text-sm font-medium truncate">
             {googleProfile?.name || (isSignedIn ? '已登录' : '登录')}
           </span>

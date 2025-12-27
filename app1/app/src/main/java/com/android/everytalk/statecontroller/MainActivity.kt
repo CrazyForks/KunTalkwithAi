@@ -45,6 +45,7 @@ import com.android.everytalk.ui.screens.MainScreen.ChatScreen
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.screens.account.AccountScreen
+import com.android.everytalk.ui.components.dialogs.AboutDialog
 import com.android.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
 
@@ -164,6 +165,15 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     ) { contentPadding ->
+                        // 关于对话框 - 提升至顶层
+                        val showAboutDialog by appViewModel.showAboutDialog.collectAsState()
+                        if (showAboutDialog) {
+                            AboutDialog(
+                                viewModel = appViewModel,
+                                onDismiss = { appViewModel.dismissAboutDialog() }
+                            )
+                        }
+
                         val density = LocalDensity.current
                         val configuration = LocalConfiguration.current
                         val screenWidthDp = configuration.screenWidthDp.dp

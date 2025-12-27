@@ -20,7 +20,11 @@ function base64UrlToJson(base64Url: string): any {
   const b64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
   const padLen = (4 - (b64.length % 4)) % 4;
   const padded = b64 + '='.repeat(padLen);
-  const json = atob(padded);
+  const bin = atob(padded);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  const json = typeof TextDecoder !== 'undefined'
+    ? new TextDecoder('utf-8').decode(bytes)
+    : decodeURIComponent(escape(bin));
   return JSON.parse(json);
 }
 

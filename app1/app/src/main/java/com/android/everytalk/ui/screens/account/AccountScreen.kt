@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -92,10 +93,40 @@ fun AccountScreen(
             AccountInfoCard(
                 userInfo = userInfo,
                 onSignInClick = { showGoogleSignInDialog = true },
-                onSignOutClick = { viewModel.signOut() }
+                onSignOutClick = { viewModel.signOut() },
+                onSwitchAccountClick = { viewModel.showToast("切换账号功能开发中") },
+                onAddAccountClick = { viewModel.showToast("添加账号功能开发中") }
             )
             
-            // 未来可扩展更多账号相关设置
+            Spacer(Modifier.height(16.dp))
+
+            // 关于按钮
+            Button(
+                onClick = { viewModel.showAboutDialog() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    Icon(Icons.Filled.Info, contentDescription = null)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "关于 EveryTalk",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         }
     }
 }
@@ -104,7 +135,9 @@ fun AccountScreen(
 private fun AccountInfoCard(
     userInfo: com.android.everytalk.data.DataClass.UserInfo?,
     onSignInClick: () -> Unit,
-    onSignOutClick: () -> Unit
+    onSignOutClick: () -> Unit,
+    onSwitchAccountClick: () -> Unit,
+    onAddAccountClick: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
     val containerColor = MaterialTheme.colorScheme.surface
@@ -174,8 +207,8 @@ private fun AccountInfoCard(
                     
                     // 预留功能：切换账号
                     OutlinedButton(
-                        onClick = { /* TODO: 切换账号逻辑 */ },
-                        enabled = false, // 暂时禁用
+                        onClick = onSwitchAccountClick,
+                        enabled = true,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -185,8 +218,8 @@ private fun AccountInfoCard(
                  // 预留功能：添加账号
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
-                    onClick = { /* TODO: 添加账号逻辑 */ },
-                    enabled = false, // 暂时禁用
+                    onClick = onAddAccountClick,
+                    enabled = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
