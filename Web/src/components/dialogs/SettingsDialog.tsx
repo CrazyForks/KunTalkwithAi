@@ -6,6 +6,8 @@ import { AddConfigDialog } from './AddConfigDialog';
 import { ImportExportDialog } from './ImportExportDialog';
 import { StorageService } from '../../services/StorageService';
 import { ImportExportService } from '../../services/ImportExportService';
+import { AuthService } from '../../services/AuthService';
+import { CloudSyncService } from '../../services/CloudSyncService';
 
 import { type ApiConfig } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -48,6 +50,78 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   const [deleteTarget, setDeleteTarget] = useState<ApiConfig | null>(null);
   const [modelEditTarget, setModelEditTarget] = useState<ApiConfig | null>(null);
   const [newModelId, setNewModelId] = useState('');
+
+  const [isSignedIn, setIsSignedIn] = useState(AuthService.isSignedIn());
+  const [authBusy, setAuthBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const googleBtnRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setIsSignedIn(AuthService.isSignedIn());
+
+    const clientId = (import.meta as any).env?.VITE_GOOGLE_WEB_CLIENT_ID as string | undefined;
+    const w = window as any;
+    const hasGis = !!w?.google?.accounts?.id;
+    if (!clientId || !hasGis) return;
+    if (!googleBtnRef.current) return;
+
+    try {
+      w.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async (resp: any) => {
+          const cred = resp?.credential;
+          if (!cred) return;
+          setAuthBusy(true);
+          try {
+            await AuthService.signInWithGoogleIdToken(cred);
+            setIsSignedIn(true);
+            alert('登录成功');
+          } catch (e: any) {
+            alert(`登录失败: ${e?.message ?? String(e)}`);
+          } finally {
+            setAuthBusy(false);
+          }
+        },
+      });
+
+      googleBtnRef.current.innerHTML = '';
+      w.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: 'outline',
+        size: 'large',
+        width: 260,
+      });
+    } catch {
+      // ignore
+    }
+  }, [isOpen]);
+
+  const handleSignOut = () => {
+    AuthService.signOut();
+    setIsSignedIn(false);
+    alert('已退出登录');
+  };
+
+  const handleTestPull = async () => {
+    setSyncBusy(true);
+    try {
+      const data = await CloudSyncService.pull(0);
+      alert(
+        `sync/pull 成功\n` +
+          `conversations=${data.conversations?.length ?? 0}\n` +
+          `messages=${data.messages?.length ?? 0}\n` +
+          `apiConfigs=${data.apiConfigs?.length ?? 0}\n` +
+          `groups=${data.groups?.length ?? 0}\n` +
+          `conversationSettings=${data.conversationSettings?.length ?? 0}\n` +
+          `tombstones=${data.tombstones?.length ?? 0}`
+      );
+    } catch (e: any) {
+      alert(`sync/pull 失败: ${e?.message ?? String(e)}`);
+    } finally {
+      setSyncBusy(false);
+    }
+  };
 
   const liveConfigs = useLiveQuery(
     () => (isOpen ? StorageService.getAllApiConfigs('TEXT') : Promise.resolve([] as ApiConfig[])),
@@ -224,6 +298,45 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
       <Dialog isOpen={isOpen} onClose={onClose} title="模型配置管理" maxWidth="max-w-3xl">
         <div className="flex flex-col h-[650px] bg-[#09090b] text-zinc-100 relative">
           <div className="flex-1 overflow-y-auto px-6 custom-scrollbar pb-6 pt-6">
+            <div className="mb-6 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col gap-1">
+                  <div className="text-sm font-bold text-white">账号同步</div>
+                  <div className="text-xs text-zinc-400">登录后可使用云端同步（Web/Android 同账号共享数据）</div>
+                  <div className="text-xs text-zinc-500">API: {AuthService.getApiBaseUrl()}</div>
+                </div>
+
+                <div className="flex flex-col items-end gap-2">
+                  <div className={`text-xs font-bold ${isSignedIn ? 'text-emerald-400' : 'text-zinc-400'}`}>
+                    {isSignedIn ? '已登录' : '未登录'}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={!isSignedIn || authBusy}
+                      onClick={handleSignOut}
+                      className="px-3 py-2 rounded-lg text-xs font-bold bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50"
+                    >
+                      退出
+                    </button>
+                    <button
+                      disabled={!isSignedIn || syncBusy}
+                      onClick={handleTestPull}
+                      className="px-3 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      测试同步
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center gap-4">
+                <div ref={googleBtnRef} />
+                <div className="text-xs text-zinc-500">
+                  需要在 Web 的环境变量中配置 `VITE_GOOGLE_WEB_CLIENT_ID`。
+                </div>
+              </div>
+            </div>
+
             <div className="flex items-center justify-between gap-4 mb-6">
               <button
                 onClick={() => setShowAddConfig(true)}
