@@ -52,7 +52,8 @@ data class MessageEntity(
     val parts: List<MarkdownPart>,
     val executionStatus: String?,
     val modelName: String? = null,
-    val providerName: String? = null
+    val providerName: String? = null,
+    val updatedAt: Long = timestamp // Add updatedAt for sync
 )
 
 fun MessageEntity.toMessage(): Message {
@@ -74,7 +75,10 @@ fun MessageEntity.toMessage(): Message {
         parts = parts,
         executionStatus = executionStatus,
         modelName = modelName,
-        providerName = providerName
+        providerName = providerName,
+        // Message class might not have updatedAt yet, but that's fine for UI model.
+        // We can expose it if needed, but usually UI uses timestamp.
+        // For sync, we use Entity.
     )
 }
 
@@ -98,6 +102,7 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         parts = parts,
         executionStatus = executionStatus,
         modelName = modelName,
-        providerName = providerName
+        providerName = providerName,
+        updatedAt = timestamp // Default to timestamp when converting from UI model
     )
 }

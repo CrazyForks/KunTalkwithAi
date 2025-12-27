@@ -73,9 +73,20 @@ import com.android.everytalk.statecontroller.controller.config.ConfigFacade
 import com.android.everytalk.statecontroller.controller.config.ProviderController
 import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.util.storage.IncrementalBackupManager
+import com.android.everytalk.statecontroller.controller.auth.AuthManager
+import com.android.everytalk.statecontroller.controller.auth.AuthService
+import com.android.everytalk.util.DeviceIdManager
+import com.android.everytalk.util.AuthTokenStore
 
 // Constructor changed: removed dataSource
 class AppViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val authManager by lazy { AuthManager(application.applicationContext) }
+    private val authService by lazy { AuthService() }
+    private val authTokenStore by lazy { AuthTokenStore(application.applicationContext) }
+
+    private val _accessToken = MutableStateFlow<String?>(authTokenStore.getAccessToken())
+    val accessToken: StateFlow<String?> = _accessToken.asStateFlow()
 
     private val json = Json {
         prettyPrint = true
@@ -833,13 +844,52 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = forceSave, isImageGeneration = isImageGeneration)
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Failed to save chat to history", e)
+                showSnackbar("保存历史记录失败: ${e.message}")
             }
         }
     }
-    
-    // 获取当前会话的生成参数
+
+    /**
+     * 发起 Google 登录
+     * 需要在 Activity 中调用，并传入 Activity 实例
+     */
+    fun signInWithGoogle(activity: android.app.Activity, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                // 1. 获取 Google ID Token
+                val idToken = authManager.signInWithGoogle(activity)
+
+                // 2. 获取 Device ID
+                val deviceId = DeviceIdManager.getDeviceId(getApplication())
+
+                // 3. 交换 Access Token
+                val accessToken = authService.exchangeGoogleIdToken(idToken, deviceId)
+
+                // 4. 持久化并更新状态
+                authTokenStore.setAccessToken(accessToken)
+                _accessToken.value = accessToken
+
+                withContext(Dispatchers.Main) {
+                    onSuccess()
+                    showSnackbar("Google 登录成功")
+                }
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Google Sign-In failed", e)
+                withContext(Dispatchers.Main) {
+                    onError(e.message ?: "登录失败")
+                    showSnackbar("登录失败: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun signOut() {
+        authTokenStore.clear()
+        _accessToken.value = null
+        showSnackbar("已退出登录")
+    }
+
     fun getCurrentConversationParameters(): GenerationConfig? {
-        // 严格按会话返回；新会话默认无配置（maxTokens 关闭）
         return stateHolder.getCurrentConversationConfig()
     }
 

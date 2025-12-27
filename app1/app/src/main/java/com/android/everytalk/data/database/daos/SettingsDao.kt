@@ -58,4 +58,22 @@ interface SettingsDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertConversationParams(params: List<ConversationParamsEntity>)
+
+    @Query("SELECT * FROM conversation_groups WHERE updatedAt > :since")
+    suspend fun getGroupsSince(since: Long): List<ConversationGroupEntity>
+
+    @Query("SELECT * FROM conversation_params WHERE updatedAt > :since")
+    suspend fun getConversationParamsSince(since: Long): List<ConversationParamsEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGroup(group: ConversationGroupEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertConversationParam(param: ConversationParamsEntity)
+
+    @Query("DELETE FROM conversation_groups WHERE groupName = :groupName")
+    suspend fun deleteGroup(groupName: String)
+
+    @Query("DELETE FROM conversation_params WHERE conversationId = :conversationId")
+    suspend fun deleteConversationParam(conversationId: String)
 }

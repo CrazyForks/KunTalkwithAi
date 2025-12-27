@@ -170,6 +170,8 @@ android {
             buildConfigField("String", "SEEDREAM_API_URL", "\"${getConfigValue("SEEDREAM_API_URL")}\"")
             buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"${getConfigValue("GOOGLE_SEARCH_API_KEY")}\"")
             buildConfigField("String", "ZHIPU_API_KEY", "\"${getConfigValue("ZHIPU_API_KEY")}\"")
+            buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${getConfigValue("VITE_GOOGLE_WEB_CLIENT_ID")}\"")
+            buildConfigField("String", "EVERYTALK_CLOUD_API_BASE_URL", "\"${getConfigValue("VITE_SYNC_API_BASE_URL", "https://api.everytalk.cc")}\"")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
@@ -192,6 +194,8 @@ android {
             buildConfigField("String", "SEEDREAM_API_URL", "\"${getConfigValue("SEEDREAM_API_URL")}\"")
             buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"${getConfigValue("GOOGLE_SEARCH_API_KEY")}\"")
             buildConfigField("String", "ZHIPU_API_KEY", "\"${getConfigValue("ZHIPU_API_KEY")}\"")
+            buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${getConfigValue("VITE_GOOGLE_WEB_CLIENT_ID")}\"")
+            buildConfigField("String", "EVERYTALK_CLOUD_API_BASE_URL", "\"${getConfigValue("VITE_SYNC_API_BASE_URL", "https://api.everytalk.cc")}\"")
 
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
@@ -288,6 +292,11 @@ android {
         implementation("io.ktor:ktor-client-logging:3.3.2")
         implementation("io.ktor:ktor-client-websockets:3.3.2")  // WebSocket 支持，用于阿里云实时语音识别
 
+        // ===== Retrofit & WorkManager (数据同步) =====
+        implementation("com.squareup.retrofit2:retrofit:2.9.0")
+        implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
+        implementation("androidx.work:work-runtime-ktx:2.9.0")
+
         // SLF4J - Ktor logging 的间接依赖,必须保留
         implementation("org.slf4j:slf4j-nop:2.0.17")
 
@@ -347,6 +356,11 @@ android {
         implementation(libs.mlkit.barcode.scanning)
         // ZXing Core (辅助工具)
         implementation("com.google.zxing:core:3.5.3")
+
+        // ===== Credential Manager =====
+        implementation(libs.androidx.credentials)
+        implementation(libs.androidx.credentials.play.services.auth)
+        implementation(libs.googleid)
         
         // ===== Hilt Dependency Injection =====
         // 暂不启用 - Kotlin 2.1.0 兼容性问题

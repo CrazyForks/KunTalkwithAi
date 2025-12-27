@@ -19,7 +19,10 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
+import com.android.everytalk.ui.screens.settings.dialogs.GoogleSignInDialog
+import android.app.Activity
 import java.util.UUID
+import androidx.compose.material.icons.filled.AccountCircle
 
 // 平台默认地址映射
 object SettingsDefaults {
@@ -54,6 +57,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     Log.i("ScreenComposition", "SettingsScreen Composing/Recomposing.")
+    val accessToken by viewModel.accessToken.collectAsState()
     val textConfigs by viewModel.apiConfigs.collectAsState()
     val imageConfigs by viewModel.imageGenApiConfigs.collectAsState()
     // 使用UI意图模式，避免基于内容态推断造成的短暂不一致
@@ -71,6 +75,8 @@ fun SettingsScreen(
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
+    
+    var showGoogleSignInDialog by remember { mutableStateOf(false) }
 
     val apiConfigsByApiKeyAndModality = remember(textConfigs, imageConfigs, isInImageMode) {
         val configsToShow = if (isInImageMode) {
@@ -234,6 +240,22 @@ fun SettingsScreen(
                     }
                 },
                 actions = {
+                    // 添加 Google 登录按钮 (临时放置)
+                    IconButton(
+                        onClick = {
+                            if (accessToken.isNullOrBlank()) {
+                                showGoogleSignInDialog = true
+                            } else {
+                                viewModel.signOut()
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.AccountCircle,
+                            contentDescription = "账号同步",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                     IconButton(onClick = { showImportExportDialog = true }) {
                         Icon(
                             imageVector = Icons.Default.ImportExport,
@@ -525,6 +547,30 @@ fun SettingsScreen(
             text = "您确定要删除模型平台 “$providerToDelete” 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
         )
     }
+    if (showGoogleSignInDialog) {
+        val activity = LocalContext.current as? Activity
+        GoogleSignInDialog(
+            showDialog = true,
+            onDismiss = { showGoogleSignInDialog = false },
+            onSignIn = {
+                if (activity != null) {
+                    viewModel.signInWithGoogle(
+                        activity = activity,
+                        onSuccess = {
+                            viewModel.showToast("登录成功")
+                            showGoogleSignInDialog = false
+                        },
+                        onError = { error ->
+                            viewModel.showToast("登录失败: $error")
+                        }
+                    )
+                } else {
+                    viewModel.showToast("无法获取 Activity Context")
+                }
+            }
+        )
+    }
+
     if (showImportExportDialog) {
         // 获取聊天历史数量
         val chatHistory by viewModel.historicalConversations.collectAsState()

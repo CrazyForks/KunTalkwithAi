@@ -18,6 +18,18 @@ interface ApiConfigDao {
 
     @Query("DELETE FROM api_configs WHERE isImageGenConfig = :isImageGen")
     suspend fun clearConfigs(isImageGen: Boolean)
+
+    @Query("SELECT * FROM api_configs WHERE updatedAt > :since")
+    suspend fun getConfigsSince(since: Long): List<ApiConfigEntity>
+
+    @Query("SELECT * FROM api_configs WHERE id = :id")
+    suspend fun getConfig(id: String): ApiConfigEntity?
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertConfig(config: ApiConfigEntity)
+
+    @Query("DELETE FROM api_configs WHERE id = :id")
+    suspend fun deleteConfig(id: String)
 }
 
 @Dao

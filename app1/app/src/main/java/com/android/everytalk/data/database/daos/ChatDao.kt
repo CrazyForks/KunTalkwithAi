@@ -48,4 +48,19 @@ interface ChatDao {
 
     @Query("DELETE FROM chat_sessions WHERE id = :sessionId")
     suspend fun deleteSession(sessionId: String)
+
+    @Query("SELECT * FROM chat_sessions WHERE lastModifiedTimestamp > :since")
+    suspend fun getSessionsSince(since: Long): List<ChatSessionEntity>
+
+    @Query("SELECT * FROM messages WHERE updatedAt > :since")
+    suspend fun getMessagesSince(since: Long): List<MessageEntity>
+    
+    @Query("SELECT * FROM chat_sessions WHERE id = :id")
+    suspend fun getSession(id: String): ChatSessionEntity?
+    
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun getMessage(id: String): MessageEntity?
+    
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteMessage(id: String)
 }

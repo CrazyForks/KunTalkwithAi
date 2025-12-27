@@ -34,7 +34,8 @@ data class ApiConfigEntity(
     // Are there cases where ModalityType is TEXT but it's stored in image config list? Unlikely.
     // However, keeping a "isImageGenConfig" flag might be safer if we want to mimic SP exactly.
     // But ModalityType should be the source of truth.
-    val isImageGenConfig: Boolean = false 
+    val isImageGenConfig: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 fun ApiConfigEntity.toApiConfig(): ApiConfig {
@@ -56,7 +57,8 @@ fun ApiConfigEntity.toApiConfig(): ApiConfig {
         numInferenceSteps = numInferenceSteps,
         guidanceScale = guidanceScale,
         toolsJson = toolsJson,
-        enableCodeExecution = enableCodeExecution
+        enableCodeExecution = enableCodeExecution,
+        // updatedAt is internal to database sync, not exposed to UI model yet if not needed
     )
 }
 
@@ -80,6 +82,7 @@ fun ApiConfig.toEntity(isImageGenConfig: Boolean = false): ApiConfigEntity {
         guidanceScale = guidanceScale,
         toolsJson = toolsJson,
         enableCodeExecution = enableCodeExecution,
-        isImageGenConfig = isImageGenConfig
+        isImageGenConfig = isImageGenConfig,
+        updatedAt = System.currentTimeMillis() // Default update time for new entities or conversion
     )
 }

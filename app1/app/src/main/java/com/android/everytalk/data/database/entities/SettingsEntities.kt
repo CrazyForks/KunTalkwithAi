@@ -23,7 +23,9 @@ data class PinnedItemEntity(
 data class ConversationGroupEntity(
     @PrimaryKey
     val groupName: String,
-    val conversationIds: List<String> // Stored as JSON string via TypeConverter
+    val conversationIds: List<String>, // Stored as JSON string via TypeConverter
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "expanded_groups")
@@ -36,5 +38,6 @@ data class ExpandedGroupEntity(
 data class ConversationParamsEntity(
     @PrimaryKey
     val conversationId: String,
-    val config: GenerationConfig // Stored as JSON via TypeConverter
+    val config: GenerationConfig, // Stored as JSON via TypeConverter
+    val updatedAt: Long = System.currentTimeMillis()
 )
