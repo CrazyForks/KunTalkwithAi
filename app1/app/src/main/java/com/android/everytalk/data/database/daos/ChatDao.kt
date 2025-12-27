@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Upsert
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 
@@ -62,5 +63,26 @@ interface ChatDao {
     suspend fun getMessage(id: String): MessageEntity?
     
     @Query("DELETE FROM messages WHERE id = :id")
-    suspend fun deleteMessage(id: String)
+    suspend fun deleteMessageById(id: String)
+
+    @Query("SELECT * FROM chat_sessions WHERE id = :id")
+    suspend fun getConversationById(id: String): ChatSessionEntity?
+
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun getMessageById(id: String): MessageEntity?
+
+    @Upsert
+    suspend fun insertOrUpdate(session: ChatSessionEntity)
+
+    @Upsert
+    suspend fun insertOrUpdate(message: MessageEntity)
+
+    @Query("DELETE FROM chat_sessions WHERE id = :id")
+    suspend fun deleteConversationById(id: String)
+
+    @Query("SELECT * FROM chat_sessions WHERE userId = :userId AND lastModifiedTimestamp > :since")
+    suspend fun getConversationsSince(userId: String, since: Long): List<ChatSessionEntity>
+
+    @Query("SELECT * FROM messages WHERE userId = :userId AND updatedAt > :since")
+    suspend fun getMessagesSince(userId: String, since: Long): List<MessageEntity>
 }

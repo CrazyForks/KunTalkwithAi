@@ -4,6 +4,7 @@ import cors from 'cors';
 import { z } from 'zod';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -101,6 +102,260 @@ function requireAuth(req: express.Request): { userId: string } {
   if (!decoded?.uid) throw new Error('invalid_token');
   return { userId: decoded.uid as string };
 }
+
+function bigIntToNumberMs(v: bigint | null | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  return Number(v);
+}
+
+const CreateConversationBody = z.object({
+  type: z.enum(['TEXT', 'IMAGE']).default('TEXT'),
+  title: z.string().max(300).optional().nullable(),
+  systemPrompt: z.string().max(10000).optional().nullable(),
+});
+
+app.get('/conversations', async (req, res) => {
+  let userId: string;
+  try {
+    userId = requireAuth(req).userId;
+  } catch {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const rows = await prisma.conversation.findMany({
+    where: { userId, deletedAtMs: null },
+    orderBy: [{ updatedAtMs: 'desc' }],
+    take: 200,
+  });
+
+  return res.json({
+    conversations: rows.map((c) => ({
+      id: c.id,
+      type: c.type,
+      title: c.title,
+      systemPrompt: c.systemPrompt,
+      createdAtMs: Number(c.createdAtMs),
+      updatedAtMs: Number(c.updatedAtMs),
+      isPinned: c.isPinned,
+      pinnedOrder: c.pinnedOrder,
+    })),
+  });
+});
+
+app.post('/conversations', async (req, res) => {
+  let userId: string;
+  try {
+    userId = requireAuth(req).userId;
+  } catch {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const parsed = CreateConversationBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'invalid_body', details: parsed.error.flatten() });
+  }
+
+  const now = BigInt(Date.now());
+  const created = await prisma.conversation.create({
+    data: {
+      id: crypto.randomUUID(),
+      userId,
+      type: parsed.data.type,
+      title: parsed.data.title ?? null,
+      systemPrompt: parsed.data.systemPrompt ?? null,
+      createdAtMs: now,
+      updatedAtMs: now,
+      isPinned: false,
+      pinnedOrder: 0,
+    },
+  });
+
+  return res.json({
+    conversation: {
+      id: created.id,
+      type: created.type,
+      title: created.title,
+      systemPrompt: created.systemPrompt,
+      createdAtMs: Number(created.createdAtMs),
+      updatedAtMs: Number(created.updatedAtMs),
+      isPinned: created.isPinned,
+      pinnedOrder: created.pinnedOrder,
+    },
+  });
+});
+
+app.delete('/conversations/:id', async (req, res) => {
+  let userId: string;
+  try {
+    userId = requireAuth(req).userId;
+  } catch {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const id = String(req.params.id || '');
+  if (!id) return res.status(400).json({ error: 'invalid_id' });
+  const now = BigInt(Date.now());
+
+  const updated = await prisma.conversation.updateMany({
+    where: { userId, id, deletedAtMs: null },
+    data: { deletedAtMs: now, updatedAtMs: now },
+  });
+
+  if (updated.count === 0) return res.status(404).json({ error: 'not_found' });
+  return res.json({ ok: true });
+});
+
+const ListMessagesQuery = z.object({
+  cursor: z.coerce.number().int().nonnegative().optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+app.get('/conversations/:id/messages', async (req, res) => {
+  let userId: string;
+  try {
+    userId = requireAuth(req).userId;
+  } catch {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const conversationId = String(req.params.id || '');
+  if (!conversationId) return res.status(400).json({ error: 'invalid_conversation_id' });
+
+  const parsed = ListMessagesQuery.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'invalid_query', details: parsed.error.flatten() });
+  }
+
+  const limit = parsed.data.limit ?? 100;
+  const cursor = parsed.data.cursor;
+
+  const rows = await prisma.message.findMany({
+    where: {
+      userId,
+      conversationId,
+      deletedAtMs: null,
+      ...(cursor ? { timestampMs: { lt: BigInt(cursor) } } : {}),
+    },
+    orderBy: [{ timestampMs: 'desc' }],
+    take: limit,
+  });
+
+  const asc = rows.slice().reverse();
+  const nextCursor = rows.length === limit ? bigIntToNumberMs(rows[rows.length - 1]?.timestampMs ?? null) : null;
+
+  return res.json({
+    messages: asc.map((m) => ({
+      id: m.id,
+      conversationId: m.conversationId,
+      text: m.text,
+      role: m.role,
+      reasoning: m.reasoning,
+      isError: m.isError,
+      timestampMs: Number(m.timestampMs),
+      imagesJson: m.imagesJson,
+    })),
+    nextCursor,
+  });
+});
+
+const CreateMessageBody = z.object({
+  role: z.enum(['user', 'assistant', 'system']),
+  text: z.string().min(1).max(200000),
+  reasoning: z.string().max(200000).optional().nullable(),
+  isError: z.boolean().optional(),
+  timestampMs: z.number().int().nonnegative().optional(),
+  imagesJson: z.string().max(200000).optional().nullable(),
+});
+
+app.post('/conversations/:id/messages', async (req, res) => {
+  let userId: string;
+  try {
+    userId = requireAuth(req).userId;
+  } catch {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const conversationId = String(req.params.id || '');
+  if (!conversationId) return res.status(400).json({ error: 'invalid_conversation_id' });
+
+  const parsed = CreateMessageBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'invalid_body', details: parsed.error.flatten() });
+  }
+
+  const ts = BigInt(parsed.data.timestampMs ?? Date.now());
+  const id = crypto.randomUUID();
+
+  try {
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const conv = await tx.conversation.findFirst({ where: { userId, id: conversationId, deletedAtMs: null } });
+      if (!conv) {
+        return null;
+      }
+
+      const created = await tx.message.create({
+        data: {
+          id,
+          userId,
+          conversationId,
+          text: parsed.data.text,
+          role: parsed.data.role,
+          reasoning: parsed.data.reasoning ?? null,
+          isError: parsed.data.isError ?? false,
+          timestampMs: ts,
+          imagesJson: parsed.data.imagesJson ?? null,
+        },
+      });
+
+      const newUpdatedAt = conv.updatedAtMs > ts ? conv.updatedAtMs : ts;
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: { updatedAtMs: newUpdatedAt, deletedAtMs: null },
+      });
+
+      return created;
+    });
+
+    if (!result) return res.status(404).json({ error: 'conversation_not_found' });
+
+    return res.json({
+      message: {
+        id: result.id,
+        conversationId: result.conversationId,
+        text: result.text,
+        role: result.role,
+        reasoning: result.reasoning,
+        isError: result.isError,
+        timestampMs: Number(result.timestampMs),
+        imagesJson: result.imagesJson,
+      },
+    });
+  } catch (e) {
+    console.error('create message failed', e);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+app.delete('/messages/:id', async (req, res) => {
+  let userId: string;
+  try {
+    userId = requireAuth(req).userId;
+  } catch {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const id = String(req.params.id || '');
+  if (!id) return res.status(400).json({ error: 'invalid_id' });
+  const now = BigInt(Date.now());
+
+  const updated = await prisma.message.updateMany({
+    where: { userId, id, deletedAtMs: null },
+    data: { deletedAtMs: now },
+  });
+
+  if (updated.count === 0) return res.status(404).json({ error: 'not_found' });
+  return res.json({ ok: true });
+});
 
 type TableName = 'conversations' | 'messages' | 'apiConfigs' | 'groups' | 'conversationSettings' | 'tombstones';
 

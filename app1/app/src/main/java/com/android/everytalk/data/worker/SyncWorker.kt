@@ -6,7 +6,7 @@ import androidx.work.ListenableWorker.Result
 import androidx.work.WorkerParameters
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.network.sync.SyncAuthInterceptor
-import com.android.everytalk.data.network.sync.SyncApiService
+import com.android.everytalk.data.network.api.EveryTalkSyncApi
 import com.android.everytalk.data.auth.GoogleAuthManager
 import com.android.everytalk.data.prefs.SyncPrefs
 import com.android.everytalk.data.repository.AuthRepository
@@ -34,19 +34,26 @@ class SyncWorker(
                 .addInterceptor(SyncAuthInterceptor(context))
                 .build()
                 
-            val json = Json { ignoreUnknownKeys = true }
+            val json = Json {
+                ignoreUnknownKeys = true
+                explicitNulls = false
+            }
+            // Use the same base URL logic as Web or a fixed production URL if consistent
+            val baseUrl = BuildConfig.EVERYTALK_CLOUD_API_BASE_URL
+            
             val retrofit = Retrofit.Builder()
-                .baseUrl(BuildConfig.EVERYTALK_CLOUD_API_BASE_URL)
+                .baseUrl(baseUrl)
                 .client(client)
                 .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
                 .build()
                 
-            val apiService = retrofit.create(SyncApiService::class.java)
-            val authManager = GoogleAuthManager(context)
-            val authRepository = AuthRepository(context, apiService, syncPrefs, authManager)
-            val repository = SyncRepository(apiService, syncPrefs, database, authRepository)
+            val apiService = retrofit.create(EveryTalkSyncApi::class.java)
+            // AuthRepository only takes context and apiService in its current definition
+            val authRepository = AuthRepository(context, apiService)
+            // SyncRepository definition: db, api, authRepository
+            val repository = SyncRepository(database, apiService, authRepository)
 
-            repository.sync()
+            repository.syncOnce()
             Result.success()
         } catch (e: Exception) {
             e.printStackTrace()

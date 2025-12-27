@@ -34,7 +34,7 @@ fun SyncSettingsDialog(
     authRepository: AuthRepository,
     syncRepository: SyncRepository
 ) {
-    val isSignedIn by authRepository.isSignedIn.collectAsState()
+    val isSignedIn by authRepository.isSignedIn.collectAsState(initial = false)
     val scope = rememberCoroutineScope()
     var isSyncing by remember { mutableStateOf(false) }
     var syncMessage by remember { mutableStateOf("") }
@@ -58,7 +58,7 @@ fun SyncSettingsDialog(
                                 syncMessage = ""
                                 scope.launch {
                                     try {
-                                        syncRepository.sync()
+                                        syncRepository.syncOnce()
                                         syncMessage = "同步完成"
                                     } catch (e: Exception) {
                                         syncMessage = "同步失败: ${e.message}"
@@ -90,12 +90,12 @@ fun SyncSettingsDialog(
                     Button(
                         onClick = {
                             scope.launch {
-                                val success = authRepository.signInWithGoogle()
-                                if (success) {
+                                val result = authRepository.signInWithGoogle()
+                                if (result.isSuccess) {
                                     // Auto sync after login
                                     isSyncing = true
                                     try {
-                                        syncRepository.sync()
+                                        syncRepository.syncOnce()
                                         syncMessage = "同步完成"
                                     } catch (e: Exception) {
                                         syncMessage = "登录成功，但同步失败"

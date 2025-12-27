@@ -875,9 +875,11 @@ class DataPersistenceManager(
             roomDataSource.saveSelectedConfigId(null) // 确保选中的也被清掉
             roomDataSource.clearImageGenApiConfigs()
             roomDataSource.saveSelectedImageGenConfigId(null)
+            roomDataSource.setSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, null)
             Log.i(TAG, "clearAllApiConfigData: API配置数据已通过 RoomDataSource 清除。")
         }
     }
+
     suspend fun saveLastOpenChat(messages: List<Message>, isImageGeneration: Boolean = false) {
         android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT START ===")
         android.util.Log.d("DataPersistenceManager", "Saving ${messages.size} messages, isImageGeneration: $isImageGeneration")
@@ -952,6 +954,7 @@ class DataPersistenceManager(
             Log.d(TAG, "Cleared last open chat for isImageGeneration=$isImageGeneration from Room")
         }
     }
+
     suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")

@@ -79,6 +79,7 @@ import com.android.everytalk.statecontroller.controller.auth.GoogleUserInfoManag
 import com.android.everytalk.data.DataClass.UserInfo
 import com.android.everytalk.util.DeviceIdManager
 import com.android.everytalk.util.AuthTokenStore
+import com.android.everytalk.data.network.cloud.CloudChatService
 
 // Constructor changed: removed dataSource
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -87,6 +88,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val authService by lazy { AuthService() }
     private val authTokenStore by lazy { AuthTokenStore(application.applicationContext) }
     private val googleUserInfoManager by lazy { GoogleUserInfoManager(application.applicationContext) }
+    private val cloudChatService by lazy { CloudChatService() }
 
     private val _accessToken = MutableStateFlow<String?>(authTokenStore.getAccessToken())
     val accessToken: StateFlow<String?> = _accessToken.asStateFlow()
@@ -807,6 +809,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             systemPrompt = promptToUse,
             isImageGeneration = isImageGeneration
         )
+        // Trigger sync to push user message to cloud
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
     }
 
     fun addMediaItem(item: SelectedMediaItem) {
@@ -888,6 +892,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                    Log.w("AppViewModel", "UserInfo is null (both backend and frontend), skipping saveUserInfo")
                 }
 
+                runCatching {
+                    pullCloudTextHistory(accessToken)
+                }.onFailure { e ->
+                    Log.e("AppViewModel", "Failed to pull cloud history after login", e)
+                    showSnackbar("云端数据拉取失败: ${e.message}")
+                }
+
                 withContext(Dispatchers.Main) {
                     onSuccess()
                     showSnackbar("Google 登录成功")
@@ -902,11 +913,85 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun pullCloudTextHistory(accessToken: String) {
+        withContext(Dispatchers.IO) {
+            stateHolder._isLoadingHistoryData.value = true
+            try {
+                val conversations = cloudChatService.listConversations(accessToken)
+                val history = mutableListOf<List<Message>>()
+
+                for (conv in conversations.take(50)) {
+                    val remoteMessages = runCatching {
+                        cloudChatService.listMessages(accessToken, conv.id, limit = 200)
+                    }.getOrElse { emptyList() }
+
+                    val mapped = remoteMessages.map { cloudChatService.mapDtoToMessage(it) }
+                    val withSystemPrompt = if (!conv.systemPrompt.isNullOrBlank()) {
+                        listOf(
+                            Message(
+                                id = "system_${conv.id}",
+                                text = conv.systemPrompt,
+                                sender = Sender.System,
+                                timestamp = conv.createdAtMs
+                            )
+                        ) + mapped
+                    } else {
+                        mapped
+                    }
+
+                    val withTitle = if (!conv.title.isNullOrBlank()) {
+                        listOf(
+                            Message(
+                                id = "title_${conv.id}",
+                                text = conv.title,
+                                sender = Sender.System,
+                                timestamp = conv.createdAtMs - 1,
+                                isPlaceholderName = true,
+                                contentStarted = true
+                            )
+                        ) + withSystemPrompt
+                    } else {
+                        withSystemPrompt
+                    }
+
+                    if (withTitle.isNotEmpty()) {
+                        history.add(withTitle)
+                    }
+                }
+
+                // Persist first, then update in-memory state
+                persistenceManager.saveChatHistory(history, isImageGeneration = false)
+                persistenceManager.clearLastOpenChat(isImageGeneration = false)
+
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder._historicalConversations.value = history
+                    stateHolder.systemPrompts.clear()
+                    history.forEach { conversation ->
+                        val stableId = com.android.everytalk.util.ConversationNameHelper.resolveStableId(conversation)
+                        if (stableId != null) {
+                            val prompt = conversation.firstOrNull {
+                                it.sender == Sender.System && !it.isPlaceholderName
+                            }?.text ?: ""
+                            stateHolder.systemPrompts[stableId] = prompt
+                        }
+                    }
+                }
+            } finally {
+                stateHolder._isLoadingHistoryData.value = false
+            }
+        }
+    }
+
     fun signOut() {
         authTokenStore.clear()
         _accessToken.value = null
         viewModelScope.launch {
             googleUserInfoManager.clearUserInfo()
+            // Cloud Authority Mode: Clear local data on sign out to ensure
+            // no data remains accessible without an account.
+            clearAllConversations()
+            clearAllImageGenerationConversations()
+            clearAllConfigs()
         }
         showSnackbar("已退出登录")
     }
@@ -925,10 +1010,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmMessageEdit() {
         editMessageController.confirmMessageEdit()
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
     }
 
     fun confirmImageGenerationMessageEdit() {
         editMessageController.confirmImageGenerationMessageEdit()
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
     }
 
     fun dismissEditDialog() {
@@ -1064,11 +1151,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         historyController.deleteConversation(indexToDelete, isImageGeneration = false)
         // 删除后清理置顶集合中已不存在的会话ID
         cleanupPinnedIds(isImageGeneration = false)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
     }
     fun deleteImageGenerationConversation(indexToDelete: Int) {
         historyController.deleteConversation(indexToDelete, isImageGeneration = true)
         // 删除后清理置顶集合中已不存在的会话ID
         cleanupPinnedIds(isImageGeneration = true)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
     }
 
     fun clearAllConversations() {
@@ -1081,6 +1170,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         stateHolder.pinnedTextConversationIds.value = emptySet()
         viewModelScope.launch(Dispatchers.IO) {
             persistenceManager.savePinnedIds(emptySet(), isImageGeneration = false)
+            com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
         }
     }
 
@@ -1094,6 +1184,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         stateHolder.pinnedImageConversationIds.value = emptySet()
         viewModelScope.launch(Dispatchers.IO) {
             persistenceManager.savePinnedIds(emptySet(), isImageGeneration = true)
+            com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
         }
     }
 
@@ -1169,29 +1260,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
  
-    fun addConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.addConfig(config, isImageGen)
+    fun addConfig(config: ApiConfig, isImageGen: Boolean = false) {
+        configFacade.addConfig(config, isImageGen)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
+    }
 
     fun addMultipleConfigs(configs: List<ApiConfig>) {
         viewModelScope.launch {
             configFacade.addMultipleConfigs(configs)
+            com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
         }
     }
-    fun updateConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.updateConfig(config, isImageGen)
-    fun deleteConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.deleteConfig(config, isImageGen)
+    fun updateConfig(config: ApiConfig, isImageGen: Boolean = false) {
+        configFacade.updateConfig(config, isImageGen)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
+    }
+    fun deleteConfig(config: ApiConfig, isImageGen: Boolean = false) {
+        configFacade.deleteConfig(config, isImageGen)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
+    }
     fun deleteConfigGroup(
             representativeConfig: ApiConfig,
             isImageGen: Boolean = false
     ) {
         configFacade.deleteConfigGroup(representativeConfig, isImageGen)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
     }
     
     fun deleteImageGenConfigGroup(
             representativeConfig: ApiConfig
     ) {
         configFacade.deleteConfigGroup(representativeConfig, isImageGen = true)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
     }
     
-    fun clearAllConfigs(isImageGen: Boolean = false) = configFacade.clearAllConfigs(isImageGen)
+    fun clearAllConfigs(isImageGen: Boolean = false) {
+        configFacade.clearAllConfigs(isImageGen)
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(getApplication())
+    }
     fun selectConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.selectConfig(config, isImageGen)
     fun clearSelectedConfig(isImageGen: Boolean = false) {
         configFacade.clearSelectedConfig(isImageGen)

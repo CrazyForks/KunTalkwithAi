@@ -47,6 +47,7 @@ import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.screens.account.AccountScreen
 import com.android.everytalk.ui.components.dialogs.AboutDialog
 import com.android.everytalk.ui.theme.App1Theme
+import com.android.everytalk.data.worker.SyncScheduler
 import kotlinx.coroutines.flow.collectLatest
 
 class AppViewModelFactory(
@@ -106,6 +107,10 @@ class MainActivity : ComponentActivity() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
         }
+
+        // Explicitly trigger sync on app launch instead of periodic background sync
+        // to enforce "Cloud Authority" - we want fresh data when the user is actually using the app.
+        com.android.everytalk.data.worker.SyncScheduler.scheduleOneTimeSync(this)
         
         setContent {
             App1Theme(dynamicColor = false) {

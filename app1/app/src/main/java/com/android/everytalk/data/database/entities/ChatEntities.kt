@@ -17,7 +17,8 @@ data class ChatSessionEntity(
     val creationTimestamp: Long,
     val lastModifiedTimestamp: Long,
     val isImageGeneration: Boolean,
-    val title: String? = null // Optional title caching
+    val title: String? = null, // Optional title caching
+    val userId: String = "" // Add userId for sync
 )
 
 @Entity(
@@ -53,7 +54,8 @@ data class MessageEntity(
     val executionStatus: String?,
     val modelName: String? = null,
     val providerName: String? = null,
-    val updatedAt: Long = timestamp // Add updatedAt for sync
+    val updatedAt: Long, // Removed default value referencing timestamp
+    val userId: String = "" // Add userId for sync
 )
 
 fun MessageEntity.toMessage(): Message {
@@ -103,6 +105,7 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         executionStatus = executionStatus,
         modelName = modelName,
         providerName = providerName,
-        updatedAt = timestamp // Default to timestamp when converting from UI model
+        updatedAt = timestamp, // Default to timestamp when converting from UI model
+        userId = "" // Default userId
     )
 }
