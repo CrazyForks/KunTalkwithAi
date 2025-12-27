@@ -21,6 +21,7 @@ import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import com.android.everytalk.util.SyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

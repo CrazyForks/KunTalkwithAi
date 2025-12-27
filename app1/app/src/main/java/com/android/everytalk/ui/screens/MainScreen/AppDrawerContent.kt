@@ -87,6 +87,7 @@ fun AppDrawerContent(
     getPreviewForIndex: (Int) -> String,
     getFullTextForIndex: (Int) -> String,
     onAboutClick: () -> Unit,
+    onScanQrClick: () -> Unit, // 新增：扫码点击回调
     onImageGenerationClick: () -> Unit,
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     isImageGenerationMode: Boolean,
@@ -865,6 +866,45 @@ fun AppDrawerContent(
                 }
             }
             Spacer(Modifier.height(16.dp)) // Add some space before the button
+            Button(
+                onClick = { onScanQrClick() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .height(48.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                ),
+                elevation = ButtonDefaults.buttonElevation(
+                    defaultElevation = 0.dp,
+                    pressedElevation = 0.dp
+                ),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    Icon(
+                        Icons.Filled.QrCodeScanner,
+                        "扫码同步图标",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.width(20.dp))
+                    Text(
+                        "Web端同步",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             Button(
                 onClick = { onAboutClick() },
                 modifier = Modifier

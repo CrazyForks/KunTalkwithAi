@@ -10,6 +10,32 @@
 !README.md
 !LICENSE
 !*.md
+!docker-compose.yml
+!compose.yml
+
+!Web/
+!Web/**
+Web/node_modules/
+Web/dist/
+Web/.env
+Web/.env.*
+
+!server/
+!server/**
+server/node_modules/
+server/dist/
+server/build/
+server/.env
+server/.env.*
+
+!backend/
+!backend/**
+backend/node_modules/
+backend/dist/
+backend/build/
+backend/.env
+backend/.env.*
+!backend/.env.example
 
 # ===== 允许 Gradle 相关文件 =====
 !gradle/

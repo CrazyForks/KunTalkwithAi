@@ -338,6 +338,15 @@ android {
         implementation(libs.room.runtime)
         implementation(libs.room.ktx)
         ksp(libs.room.compiler)
+
+        // ===== CameraX & ML Kit =====
+        implementation(libs.androidx.camera.core)
+        implementation(libs.androidx.camera.camera2)
+        implementation(libs.androidx.camera.lifecycle)
+        implementation(libs.androidx.camera.view)
+        implementation(libs.mlkit.barcode.scanning)
+        // ZXing Core (辅助工具)
+        implementation("com.google.zxing:core:3.5.3")
         
         // ===== Hilt Dependency Injection =====
         // 暂不启用 - Kotlin 2.1.0 兼容性问题

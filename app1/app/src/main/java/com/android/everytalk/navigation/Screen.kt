@@ -6,6 +6,7 @@ object Screen {
     const val IMAGE_GENERATION_SCREEN = "image_generation_screen"
     const val IMAGE_GENERATION_SETTINGS_SCREEN = "image_generation_settings_screen"
     const val VOICE_INPUT_SCREEN = "voice_input_screen"
+    const val SYNC_SCAN_SCREEN = "sync_scan_screen"
     
     // 新增：带参数的路由
     const val CHAT_WITH_HISTORY = "chat_screen/{historyIndex}"

@@ -48,7 +48,10 @@ class DataPersistenceManager(
             roomDataSource.saveCustomProviders(providers)
         }
     }
-
+    
+    // --- Public accessors for SyncManager ---
+    suspend fun loadApiConfigs(): List<ApiConfig> = roomDataSource.loadApiConfigs()
+    
     /**
      * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
      * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。

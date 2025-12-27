@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16
+    container_name: everytalk_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: everytalk
+      POSTGRES_USER: everytalk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-everytalk_password}
+    volumes:
+      - everytalk_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: ./backend
+    container_name: everytalk_api
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://everytalk:${POSTGRES_PASSWORD:-everytalk_password}@db:5432/everytalk?schema=public
+      JWT_SECRET: ${JWT_SECRET:-change_me}
+      GOOGLE_CLIENT_IDS: ${GOOGLE_CLIENT_IDS:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://web.everytalk.cc,http://localhost:5173}
+    ports:
+      - "3001:3000"
+
+volumes:
+  everytalk_pgdata:

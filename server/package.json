@@ -1,0 +1,12 @@
+{
+  "name": "everytalk-relay-server",
+  "version": "1.0.0",
+  "description": "Simple WebSocket Relay for EveryTalk Sync",
+  "main": "relay_server.js",
+  "scripts": {
+    "start": "node relay_server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

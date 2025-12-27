@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  googleSub String   @unique
+  email     String?
+  name      String?
+  picture   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deviceClocks DeviceClock[]
+
+  conversations Conversation[]
+  messages      Message[]
+  apiConfigs    ApiConfig[]
+  groups        Group[]
+  convSettings  ConversationSetting[]
+  tombstones    Tombstone[]
+}
+
+model DeviceClock {
+  userId    String
+  deviceId  String
+  lastPullAt BigInt @default(0)
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, deviceId])
+}
+
+model Conversation {
+  id          String  @id
+  userId      String
+  type        String
+  title       String?
+  systemPrompt String?
+  createdAtMs BigInt
+  updatedAtMs BigInt
+  isPinned    Boolean @default(false)
+  pinnedOrder Int     @default(0)
+  deletedAtMs BigInt? // tombstone alternative (optional)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAtMs])
+}
+
+model Message {
+  id            String @id
+  userId        String
+  conversationId String
+  text          String
+  role          String
+  reasoning     String?
+  isError       Boolean @default(false)
+  timestampMs   BigInt
+  imagesJson    String?
+  deletedAtMs   BigInt?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, conversationId])
+  @@index([userId, timestampMs])
+}
+
+model ApiConfig {
+  id        String @id
+  userId    String
+  provider  String
+  name      String
+  baseUrl   String
+  apiKey    String
+  modelsJson String
+  channel   String?
+  toolsJson  String?
+  modality  String
+  isDefault Boolean @default(false)
+  updatedAtMs BigInt
+  deletedAtMs BigInt?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAtMs])
+}
+
+model Group {
+  id        String @id
+  userId    String
+  name      String
+  conversationIdsJson String
+  createdAtMs BigInt
+  updatedAtMs BigInt
+  deletedAtMs BigInt?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAtMs])
+}
+
+model ConversationSetting {
+  conversationId String @id
+  userId         String
+  type           String
+  textJson       String?
+  imageJson      String?
+  updatedAtMs    BigInt
+  deletedAtMs    BigInt?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAtMs])
+}
+
+model Tombstone {
+  id          String   @id @default(cuid())
+  userId      String
+  kind        String
+  targetId    String
+  deletedAtMs BigInt
+  deviceId    String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deletedAtMs])
+  @@unique([userId, kind, targetId])
+}
