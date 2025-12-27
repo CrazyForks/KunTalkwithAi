@@ -9,6 +9,8 @@ import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -75,6 +77,33 @@ class CloudChatService {
         val nextCursor: Long? = null
     )
 
+    @Serializable
+    data class CreateConversationRequest(
+        val type: String = "TEXT",
+        val title: String? = null,
+        val systemPrompt: String? = null
+    )
+
+    @Serializable
+    data class CreateConversationResponse(
+        val conversation: ConversationDto
+    )
+
+    @Serializable
+    data class CreateMessageRequest(
+        val role: String,
+        val text: String,
+        val reasoning: String? = null,
+        val isError: Boolean? = null,
+        val timestampMs: Long? = null,
+        val imagesJson: String? = null
+    )
+
+    @Serializable
+    data class CreateMessageResponse(
+        val message: MessageDto
+    )
+
     suspend fun listConversations(accessToken: String): List<ConversationDto> {
         val url = "$baseUrl/conversations"
         Log.d("CloudChatService", "GET $url")
@@ -101,6 +130,67 @@ class CloudChatService {
         }
         val resp: ListMessagesResponse = response.body()
         return resp.messages
+    }
+
+    suspend fun createConversation(
+        accessToken: String,
+        type: String,
+        title: String? = null,
+        systemPrompt: String? = null
+    ): ConversationDto {
+        val url = "$baseUrl/conversations"
+        Log.d("CloudChatService", "POST $url")
+        val response: HttpResponse = client.post(url) {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+            header(HttpHeaders.ContentType, "application/json")
+            setBody(
+                CreateConversationRequest(
+                    type = type,
+                    title = title,
+                    systemPrompt = systemPrompt
+                )
+            )
+        }
+        if (!response.status.isSuccess()) {
+            val text = runCatching { response.bodyAsText() }.getOrElse { "" }
+            throw IllegalStateException("CloudChatService createConversation failed: HTTP ${response.status.value} ${response.status.description} ${text.take(300)}")
+        }
+        val resp: CreateConversationResponse = response.body()
+        return resp.conversation
+    }
+
+    suspend fun createMessage(
+        accessToken: String,
+        conversationId: String,
+        role: String,
+        text: String,
+        reasoning: String? = null,
+        isError: Boolean? = null,
+        timestampMs: Long? = null,
+        imagesJson: String? = null
+    ): MessageDto {
+        val url = "$baseUrl/conversations/$conversationId/messages"
+        Log.d("CloudChatService", "POST $url")
+        val response: HttpResponse = client.post(url) {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+            header(HttpHeaders.ContentType, "application/json")
+            setBody(
+                CreateMessageRequest(
+                    role = role,
+                    text = text,
+                    reasoning = reasoning,
+                    isError = isError,
+                    timestampMs = timestampMs,
+                    imagesJson = imagesJson
+                )
+            )
+        }
+        if (!response.status.isSuccess()) {
+            val bodyText = runCatching { response.bodyAsText() }.getOrElse { "" }
+            throw IllegalStateException("CloudChatService createMessage failed: HTTP ${response.status.value} ${response.status.description} ${bodyText.take(300)}")
+        }
+        val resp: CreateMessageResponse = response.body()
+        return resp.message
     }
 
     fun mapDtoToMessage(dto: MessageDto): Message {

@@ -378,6 +378,63 @@ function toBigIntMs(v: any): bigint {
   return BigInt(Math.floor(n));
 }
 
+function bigIntToNumber(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'bigint') return Number(v);
+  if (typeof v === 'number') return v;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeConversation(c: any) {
+  return {
+    ...c,
+    createdAtMs: bigIntToNumber(c.createdAtMs),
+    updatedAtMs: bigIntToNumber(c.updatedAtMs),
+    deletedAtMs: bigIntToNumber(c.deletedAtMs),
+  };
+}
+
+function normalizeMessage(m: any) {
+  return {
+    ...m,
+    timestampMs: bigIntToNumber(m.timestampMs),
+    deletedAtMs: bigIntToNumber(m.deletedAtMs),
+  };
+}
+
+function normalizeApiConfig(c: any) {
+  return {
+    ...c,
+    updatedAtMs: bigIntToNumber(c.updatedAtMs),
+    deletedAtMs: bigIntToNumber(c.deletedAtMs),
+  };
+}
+
+function normalizeGroup(g: any) {
+  return {
+    ...g,
+    createdAtMs: bigIntToNumber(g.createdAtMs),
+    updatedAtMs: bigIntToNumber(g.updatedAtMs),
+    deletedAtMs: bigIntToNumber(g.deletedAtMs),
+  };
+}
+
+function normalizeConversationSetting(s: any) {
+  return {
+    ...s,
+    updatedAtMs: bigIntToNumber(s.updatedAtMs),
+    deletedAtMs: bigIntToNumber(s.deletedAtMs),
+  };
+}
+
+function normalizeTombstone(t: any) {
+  return {
+    ...t,
+    deletedAtMs: bigIntToNumber(t.deletedAtMs),
+  };
+}
+
 // LWW helper
 function shouldApply(existingUpdatedAtMs: bigint | null | undefined, incomingUpdatedAtMs: bigint): boolean {
   if (!existingUpdatedAtMs) return true;
@@ -753,12 +810,12 @@ app.get('/sync/pull', async (req, res) => {
     const now = Date.now();
     return res.json({
       now,
-      conversations,
-      messages,
-      apiConfigs,
-      groups,
-      conversationSettings: convSettings,
-      tombstones,
+      conversations: conversations.map(normalizeConversation),
+      messages: messages.map(normalizeMessage),
+      apiConfigs: apiConfigs.map(normalizeApiConfig),
+      groups: groups.map(normalizeGroup),
+      conversationSettings: convSettings.map(normalizeConversationSetting),
+      tombstones: tombstones.map(normalizeTombstone),
     });
   } catch (e) {
     console.error('sync/pull failed', e);

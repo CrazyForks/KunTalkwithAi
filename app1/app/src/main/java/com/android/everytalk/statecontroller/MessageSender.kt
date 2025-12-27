@@ -21,6 +21,9 @@ import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import com.android.everytalk.data.network.cloud.CloudChatService
+import com.android.everytalk.util.AuthTokenStore
+import com.android.everytalk.util.CloudIds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -48,8 +51,9 @@ private data class AttachmentProcessingResult(
     val imageUriStringsForUi: List<String> = emptyList(),
     val apiContentParts: List<ApiContentPart> = emptyList()
 )
- class MessageSender(
-     private val application: Application,
+
+class MessageSender(
+    private val application: Application,
     private val viewModelScope: CoroutineScope,
     private val stateHolder: ViewModelStateHolder,
     private val apiHandler: ApiHandler,
@@ -60,6 +64,8 @@ private data class AttachmentProcessingResult(
 ) {
 
     private val fileManager: FileManager by lazy { FileManager(application) }
+    private val cloudChatService by lazy { CloudChatService() }
+    private val authTokenStore by lazy { AuthTokenStore(application) }
 
     companion object {
         private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
@@ -729,7 +735,70 @@ private data class AttachmentProcessingResult(
                             showSnackbar(errorMessage)
                         }
                     },
-                    onNewAiMessageAdded = triggerScrollToBottom,
+                    onNewAiMessageAdded = { _ -> triggerScrollToBottom() },
+                    onStreamFinished = onStreamFinished@{ aiMessageId ->
+                        val accessToken = authTokenStore.getAccessToken()
+                        if (accessToken.isNullOrBlank()) return@onStreamFinished
+
+                        viewModelScope.launch(Dispatchers.IO) {
+                            runCatching {
+                                if (isImageGeneration) return@runCatching
+
+                                val currentLocalConvId = stateHolder._currentConversationId.value
+                                val remoteConversationId = if (currentLocalConvId.startsWith(CloudIds.CONVERSATION_PREFIX)) {
+                                    CloudIds.toRemoteConversationId(currentLocalConvId)
+                                } else {
+                                    val created = cloudChatService.createConversation(
+                                        accessToken = accessToken,
+                                        type = "TEXT",
+                                        title = null,
+                                        systemPrompt = null
+                                    )
+
+                                    withContext(Dispatchers.Main.immediate) {
+                                        val oldId = stateHolder._currentConversationId.value
+                                        val newId = CloudIds.toLocalConversationId(created.id)
+                                        if (oldId != newId) {
+                                            stateHolder._currentConversationId.value = newId
+                                            val mapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
+                                            val cfgId = mapping.remove(oldId)
+                                            if (cfgId != null) mapping[newId] = cfgId
+                                            stateHolder.conversationApiConfigIds.value = mapping
+                                        }
+                                    }
+                                    created.id
+                                }
+
+                                val userMsg = stateHolder.messages.lastOrNull { it.sender == UiSender.User }
+                                if (userMsg != null) {
+                                    cloudChatService.createMessage(
+                                        accessToken = accessToken,
+                                        conversationId = remoteConversationId,
+                                        role = "user",
+                                        text = userMsg.text,
+                                        reasoning = null,
+                                        isError = userMsg.isError,
+                                        timestampMs = userMsg.timestamp,
+                                        imagesJson = null
+                                    )
+                                }
+
+                                val aiMsg = stateHolder.messages.firstOrNull { it.id == aiMessageId }
+                                if (aiMsg != null && (aiMsg.text.isNotBlank() || !(aiMsg.reasoning ?: "").isBlank())) {
+                                    cloudChatService.createMessage(
+                                        accessToken = accessToken,
+                                        conversationId = remoteConversationId,
+                                        role = "assistant",
+                                        text = aiMsg.text.ifBlank { "..." },
+                                        reasoning = aiMsg.reasoning,
+                                        isError = aiMsg.isError,
+                                        timestampMs = aiMsg.timestamp,
+                                        imagesJson = null
+                                    )
+                                }
+                            }
+                        }
+                    },
                     audioBase64 = audioBase64,
                     mimeType = mimeType,
                     isImageGeneration = isImageGeneration
@@ -738,7 +807,7 @@ private data class AttachmentProcessingResult(
         }
     }
 
-private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
+    private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
         return withContext(Dispatchers.IO) {
             try {
                 context.contentResolver.openInputStream(uri)?.bufferedReader().use { reader ->

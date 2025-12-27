@@ -186,7 +186,8 @@ class ApiHandler(
         afterUserMessageId: String?,
         onMessagesProcessed: () -> Unit,
         onRequestFailed: (Throwable) -> Unit,
-        onNewAiMessageAdded: () -> Unit,
+        onNewAiMessageAdded: (String) -> Unit,
+        onStreamFinished: (String) -> Unit,
         audioBase64: String? = null,
         mimeType: String? = null,
         isImageGeneration: Boolean = false
@@ -258,7 +259,7 @@ class ApiHandler(
         // 2. 然后添加消息到列表（此时状态已经正确设置）
         viewModelScope.launch(Dispatchers.Main.immediate) {
             messageList.add(newAiMessage)
-            onNewAiMessageAdded()
+            onNewAiMessageAdded(aiMessageId)
             logger.debug("🔧 AI message added to list with streaming state already set: $aiMessageId")
         }
 
@@ -361,15 +362,18 @@ class ApiHandler(
                                     logger.warn("[ImageGen] 🖼️ Failed to save history: ${e.message}")
                                 }
                             }
+                            onStreamFinished(aiMessageId)
                         } else {
                             // 后端已完成所有重试但仍无图片，将返回的文本作为错误消息处理
                             val error = IOException(responseText ?: "图像生成失败，且未返回明确错误信息。")
                             updateMessageWithError(aiMessageId, error, isImageGeneration = true)
+                            onStreamFinished(aiMessageId)
                         }
                     } catch (e: Exception) {
                         // 网络请求失败或任何其他异常
                         logger.error("[ImageGen] Exception during image generation for message $aiMessageId", e)
                         updateMessageWithError(aiMessageId, e, isImageGeneration = true)
+                        onStreamFinished(aiMessageId)
                         // 不再调用 onRequestFailed，避免 Snackbar 弹出
                     }
                } else {
@@ -412,6 +416,8 @@ class ApiHandler(
                                     stateHolder._currentTextStreamingAiMessageId.value = null
                                 }
                             }
+
+                            onStreamFinished(aiMessageId)
                         }
                         .catch { e: Throwable ->
                             if (e !is CancellationException) {

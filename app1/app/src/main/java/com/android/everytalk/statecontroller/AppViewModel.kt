@@ -991,7 +991,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             // no data remains accessible without an account.
             clearAllConversations()
             clearAllImageGenerationConversations()
-            clearAllConfigs()
+            // Clear configs deterministically (avoid async clearAllConfigs ordering issues)
+            stateHolder._apiConfigs.value = emptyList()
+            stateHolder._selectedApiConfig.value = null
+            stateHolder._imageGenApiConfigs.value = emptyList()
+            stateHolder._selectedImageGenApiConfig.value = null
+
+            persistenceManager.clearAllApiConfigData()
+            persistenceManager.loadInitialData(loadLastChat = false) { _, _ -> }
         }
         showSnackbar("已退出登录")
     }
