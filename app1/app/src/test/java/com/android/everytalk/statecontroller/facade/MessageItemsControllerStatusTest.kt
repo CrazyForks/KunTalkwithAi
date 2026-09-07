@@ -35,6 +35,35 @@ import org.junit.Test
 class MessageItemsControllerStatusTest {
 
     @Test
+    fun `历史有序长正文后台分块并保留调整边界和共享链接索引`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val firstText = (1..80).joinToString("\n\n") { "第 $it 段 [官网](https://example.com)" }
+        val secondText = "调整后的最终回答"
+        val ai = Message(
+            id = "history-ordered", text = firstText + secondText, sender = Sender.AI, contentStarted = true,
+            executionTrace = listOf(
+                ExecutionTraceEvent.Content(firstText),
+                ExecutionTraceEvent.UserMessageBoundary("steering"),
+                ExecutionTraceEvent.Content(secondText),
+            ),
+        )
+        controller.stateHolder.messages.addAll(listOf(ai, Message(id = "steering", text = "调整", sender = Sender.User)))
+        Snapshot.sendApplyNotifications()
+        val items = controller.chatListItemsForTest()
+        val segments = items.filterIsInstance<ChatListItem.AiMessageContentSegment>()
+        val firstBlocks = segments.filter { it.segmentIndex == 0 }.map { requireNotNull(it.staticBlock) }
+        assertTrue(firstBlocks.size > 1)
+        assertEquals(firstBlocks.first().preparedMarkdownDocument.nodes, firstBlocks.flatMap { it.nodes })
+        assertTrue(firstBlocks.all { it.preparedMarkdownDocument === firstBlocks.first().preparedMarkdownDocument })
+        assertEquals("example.com", firstBlocks.first().preparedMarkdownDocument.linkLogoIndex?.requests?.single()?.host)
+        val userIndex = items.indexOfFirst { it is ChatListItem.UserMessage }
+        assertTrue(items.take(userIndex).all { it is ChatListItem.AiMessageContentSegment && it.segmentIndex == 0 })
+        assertEquals(secondText, (items[userIndex + 1] as ChatListItem.AiMessageContentSegment).text)
+        assertEquals(items.size, items.map { it.stableId }.distinct().size)
+        assertTrue(segments.all { it.sourceMessageId == ai.id })
+    }
+
+    @Test
     fun `调整后的回答位于用户气泡下面且仍使用原AI消息`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val ai = Message(

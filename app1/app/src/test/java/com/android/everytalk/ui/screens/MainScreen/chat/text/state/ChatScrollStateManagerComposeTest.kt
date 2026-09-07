@@ -17,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
+import java.util.concurrent.atomic.AtomicInteger
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -35,6 +37,38 @@ import org.robolectric.annotation.Config
 class ChatScrollStateManagerComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun `历史已经在底部时启动守护不重新定位和测量`() {
+        val measures = AtomicInteger()
+        lateinit var manager: ChatScrollStateManager
+        lateinit var state: androidx.compose.foundation.lazy.LazyListState
+        composeRule.setContent {
+            state = rememberLazyListState(initialFirstVisibleItemIndex = 11)
+            manager = rememberChatScrollStateManager(state, rememberCoroutineScope())
+            LazyColumn(state = state, modifier = Modifier.height(320.dp)) {
+                items(12, key = { it }) {
+                    Spacer(Modifier.layout { measurable, constraints ->
+                        measures.incrementAndGet()
+                        val placeable = measurable.measure(constraints)
+                        layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                    }.height(180.dp))
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        var before = 0
+        composeRule.runOnIdle {
+            assertFalse(state.canScrollForward)
+            before = measures.get()
+            manager.pinToRealBottomUntilUserScroll()
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            assertFalse(state.canScrollForward)
+            assertEquals(before, measures.get())
+        }
+    }
 
     @Test
     fun `首次显示长列表时第一帧直接位于末尾`() {

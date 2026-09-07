@@ -20,6 +20,13 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownPadding
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +37,49 @@ import org.robolectric.annotation.Config
 class MarkdownLinkLogoLayoutTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun `缺失索引在后台计算且旧正文任务不能覆盖新正文`() {
+        val content = mutableStateOf("https://old.example.com")
+        val layout = mutableStateOf(0)
+        val calls = AtomicInteger()
+        val oldStarted = CountDownLatch(1)
+        val releaseOld = CountDownLatch(1)
+        val calculationThread = AtomicReference<Thread>()
+        var uiThread: Thread? = null
+        var result = MarkdownLinkLogoIndex(emptyList(), emptyMap())
+        val calculate: (String) -> MarkdownLinkLogoIndex = { text ->
+            calculationThread.set(Thread.currentThread())
+            calls.incrementAndGet()
+            if (text.contains("old.example")) {
+                oldStarted.countDown()
+                check(releaseOld.await(5, TimeUnit.SECONDS))
+            }
+            markdownLinkLogoIndex(text)
+        }
+        try {
+            composeRule.setContent {
+                uiThread = Thread.currentThread()
+                layout.value
+                val index = rememberMarkdownLinkLogoIndex(
+                    false, PreparedMessage(content.value, emptyMap(), false, 1L), null, calculate,
+                )
+                SideEffect { result = index }
+            }
+            assertTrue(oldStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(calculationThread.get() !== uiThread)
+            composeRule.runOnIdle { content.value = "https://new.example.com" }
+            composeRule.waitForIdle()
+            composeRule.waitUntil(5_000) { result.requests.firstOrNull()?.host == "new.example.com" }
+            releaseOld.countDown()
+            repeat(3) {
+                composeRule.runOnIdle { layout.value++ }
+                composeRule.waitForIdle()
+            }
+            assertEquals("new.example.com", result.requests.single().host)
+            assertEquals(2, calls.get())
+        } finally { releaseOld.countDown() }
+    }
 
     @Test
     fun `粗体美元区间在Compose文本节点中完整显示`() {

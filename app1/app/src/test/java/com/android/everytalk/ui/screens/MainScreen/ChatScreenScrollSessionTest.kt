@@ -381,7 +381,8 @@ class ChatScreenScrollSessionTest {
         assertTrue(historyJoinAt > historyJobAt)
         assertTrue(loadingFinishedAt > historyJoinAt)
         assertTrue(source.contains("historyLoadingJob?.cancelAndJoin()"))
-        assertTrue(source.contains("ConversationNameHelper.resolveStableId(loadedMessages)"))
+        assertTrue(source.contains("ConversationNameHelper.resolveStableId(lastOpenChat)"))
+        assertTrue(source.contains("ConversationNameHelper.resolveStableId(lastOpenImageGenChat)"))
         assertEquals(loadingStartedAt, source.lastIndexOf("stateHolder._isLoadingHistoryData.value = true"))
         assertEquals(loadingFinishedAt, source.indexOf("stateHolder._isLoadingHistoryData.value = false"))
     }
@@ -430,14 +431,11 @@ class ChatScreenScrollSessionTest {
     }
 
     @Test
-    fun `explicit stop cancels api and scrolls conversation to real bottom`() {
+    fun `composer delegates pause and resume to run controls`() {
         val source = chatScreenSource()
-        val stopHandler = source
-            .substringAfter("onStopApiCall = {")
-            .substringBefore("},")
-
-        assertTrue(stopHandler.contains("viewModel.onCancelAPICall()"))
-        assertTrue(stopHandler.contains("scrollStateManager.stopStreamingAndJumpToRealBottom()"))
+        // 文本输入框已迁移为暂停/继续，不能继续查找已删除的停止回调。
+        assertTrue(source.contains("onPauseStreaming = viewModel::pauseStreaming"))
+        assertTrue(source.contains("onResumeStreaming = viewModel::resumeStreaming"))
     }
 
     private fun chatScreenSource(): String {
