@@ -609,11 +609,18 @@ class ChatScrollStateManager(
     private suspend fun keepRealBottomPinned(pinGeneration: Long) {
         var handledRevision: BottomContentRevision? = null
         while (pinGeneration == stopBottomPinGeneration && isStopBottomPinActive) {
-            val changedRevision = snapshotFlow { bottomContentRevision() }
+            var changedRevision = snapshotFlow { bottomContentRevision() }
                 .distinctUntilChanged()
                 .first { revision -> revision != handledRevision }
             if (pinGeneration != stopBottomPinGeneration || !isStopBottomPinActive) return
 
+            if (changedRevision.canScrollForward) {
+                // 图片、公式和 Markdown 可能在同一帧连续改变高度；等到下一帧合并校正。
+                // 只在确实需要滚动时等待，已到底的稳定页面不产生额外帧任务。
+                withFrameNanos { }
+                if (pinGeneration != stopBottomPinGeneration || !isStopBottomPinActive) return
+                changedRevision = bottomContentRevision()
+            }
             val remainingPx = changedRevision.remainingPx
             val correction = resolveBottomCorrection(
                 remainingPx = remainingPx,
@@ -625,7 +632,6 @@ class ChatScrollStateManager(
                     "correction=$correction"
             )
             performBottomCorrection(correction, remainingPx)
-            if (correction != BottomCorrection.None) withFrameNanos { }
             // 只标记本轮真正处理过的布局。校正期间产生的新布局必须留给下一轮，
             // 否则图片或 Markdown 连续扩高时会被误判为已处理，列表停在旧底部。
             handledRevision = changedRevision
@@ -669,9 +675,7 @@ class ChatScrollStateManager(
                 BottomCorrection.AnchorLastItem -> scrollToRealBottom()
                 BottomCorrection.ScrollBy -> {
                     listState.scrollBy(requireNotNull(remainingPx).toFloat())
-                    if (resolveBottomCorrection(remainingDistanceToBottomPx()) != BottomCorrection.None) {
-                        scrollToRealBottom()
-                    }
+                    // 本次只消费已知差距；测量中产生的新高度交给下一帧，避免同步来回重排。
                 }
             }
         } finally {
@@ -751,9 +755,15 @@ class ChatScrollStateManager(
 
     private suspend fun scrollToRealBottom() {
         val lastIndex = listState.layoutInfo.totalItemsCount - 1
-        if (lastIndex < 0) return
-        listState.scrollToItem(index = lastIndex)
-        listState.scrollBy(Float.MAX_VALUE)
+        if (lastIndex < 0 || !listState.canScrollForward) return
+        val knownRemaining = remainingDistanceToBottomPx()
+        // 末条已经可见时直接补齐差距，不再先把它拉到顶部、再进行极大距离滚动。
+        // 只有末条尚未测量或布局暂时不一致时，才通过 LazyList 自身的定位获得真实尺寸。
+        if (knownRemaining == null || knownRemaining <= 0) {
+            listState.scrollToItem(index = lastIndex)
+        }
+        val remaining = remainingDistanceToBottomPx() ?: return
+        if (remaining > 0) listState.scrollBy(remaining.toFloat())
     }
 
     private fun scrollDebugSnapshot(): String {

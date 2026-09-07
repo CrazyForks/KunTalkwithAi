@@ -153,8 +153,13 @@ sealed interface ChatListItem {
         val text: String,
         val isStreaming: Boolean,
         val renderState: StreamingRenderState,
+        // 历史正文复用已有 Markdown 分块；仍保留原消息和段序号，保证工具/用户边界顺序。
+        val staticBlock: AiMarkdownNode? = null,
+        val staticPageSources: List<WebSearchResult> = emptyList(),
     ) : ChatListItem {
-        override val stableId: String = "${sourceMessageId}_content_$segmentIndex"
+        override val stableId: String = if (staticBlock == null || staticBlock.isFirstNode) {
+            "${sourceMessageId}_content_$segmentIndex"
+        } else staticBlock.stableId
     }
 
     /** 新版有序输出中一段连续的思考和工具过程。 */

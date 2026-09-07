@@ -178,7 +178,8 @@ fun ChatScreen(
     val observedHistoryLoadGenerationState = rememberUpdatedState(observedHistoryLoadGeneration)
     val historyLoadGenerationState = rememberUpdatedState(historyLoadGeneration)
     val chatListItemsState = rememberUpdatedState(chatListItems)
-    val messagesState = rememberUpdatedState(messages.toList())
+    val messageSnapshot = messages.toList()
+    val messagesState = rememberUpdatedState(messageSnapshot)
     val conversationIdState = rememberUpdatedState(conversationId)
     val isLoadingHistoryDataState = rememberUpdatedState(isLoadingHistoryData)
 
@@ -233,6 +234,12 @@ fun ChatScreen(
         mutableStateOf<Pair<Long, String?>?>(null)
     }
     val initialContentReady = initialListIndex != null
+    val messageItemsMatch = rememberHistoryMessageItemsMatch(
+        messages = messageSnapshot,
+        chatItems = chatListItems,
+        enabled = !initialScrollHandled || isHistoryLoadingOverlayVisible,
+    )
+    val messageItemsMatchState = rememberUpdatedState(messageItemsMatch)
     val listState = remember(scrollSessionKey, initialListIndex) {
         LazyListState(firstVisibleItemIndex = initialListIndex ?: 0)
     }
@@ -268,6 +275,7 @@ fun ChatScreen(
                 chatItems = chatListItemsState.value,
                 laidOutItemCount = 0,
                 requireLaidOutItemCount = false,
+                messageItemsMatch = messageItemsMatchState.value,
             )
             if (ready) currentGeneration to historyLoadingOverlayKeyState.value else null
         }
@@ -303,6 +311,7 @@ fun ChatScreen(
                         messages = messagesState.value,
                         chatItems = currentChatItems,
                         laidOutItemCount = layoutInfo.totalItemsCount,
+                        messageItemsMatch = messageItemsMatchState.value,
                     ) &&
                         lastVisibleIndex == expectedItemCount - 1 &&
                         !listState.canScrollForward

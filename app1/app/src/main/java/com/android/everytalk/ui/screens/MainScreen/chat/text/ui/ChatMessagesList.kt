@@ -515,7 +515,54 @@ fun ChatMessagesList(
                     // 根据消息类型渲染不同内容；这里不用 Column 包裹以避免额外布局抖动
                     // 前端消息列表渲染：这里按消息类型分发到不同气泡组件。
                     // 用户消息靠右，AI 和系统消息靠左，附件、思考过程、正文等内容在各自分支里渲染。
-                    when (item) {
+                    // 两种历史消息都使用同一个分块入口；有序正文保留自身段号和来源消息 ID。
+                    val staticBlock = when (item) {
+                        is ChatListItem.AiMarkdownNode -> item
+                        is ChatListItem.AiMessageContentSegment -> item.staticBlock
+                        else -> null
+                    }
+                    if (staticBlock != null) {
+                        Column {
+                            val sources = (item as? ChatListItem.AiMessageContentSegment)?.staticPageSources.orEmpty()
+                            if (sources.isNotEmpty()) {
+                                StaticAiMessageSourcesItem(
+                                    item = ChatListItem.AiMessageSources(staticBlock.message, staticBlock.messageId, sources),
+                                    maxWidth = bubbleMaxWidth,
+                                    viewModel = viewModel,
+                                )
+                            }
+                            val footnoteNavigation = footnoteNavigationByMessage.getOrPut(staticBlock.messageId) {
+                                FootnoteNavigationState()
+                            }
+                            SideEffect {
+                                footnoteNavigation.setFallbackNavigator { uri ->
+                                    val targetListIndex = resolveStaticMarkdownTargetListIndex(
+                                        currentListIndex = index,
+                                        item = staticBlock,
+                                        uri = uri,
+                                    )
+                                        ?: return@setFallbackNavigator false
+                                    listCoroutineScope.launch {
+                                        listState.animateScrollToItem(targetListIndex)
+                                    }
+                                    true
+                                }
+                            }
+                            StaticAiMarkdownNodeItem(
+                                item = staticBlock,
+                                maxWidth = bubbleMaxWidth,
+                                viewModel = viewModel,
+                                footnoteNavigationState = footnoteNavigation,
+                                onImageClick = { url ->
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (now - lastImagePreviewAt > 500) {
+                                        lastImagePreviewAt = now
+                                        onImageClick(url)
+                                    }
+                                },
+                            )
+                        }
+                    } else when (item) {
                         is ChatListItem.LoadingBubblePlaceholder -> {
                             HistoryLoadingBubblePlaceholderItem(
                                 role = item.role,
@@ -532,38 +579,7 @@ fun ChatMessagesList(
                             )
                         }
 
-                        is ChatListItem.AiMarkdownNode -> {
-                            val footnoteNavigation = footnoteNavigationByMessage.getOrPut(item.messageId) {
-                                FootnoteNavigationState()
-                            }
-                            SideEffect {
-                                footnoteNavigation.setFallbackNavigator { uri ->
-                                    val targetListIndex = resolveStaticMarkdownTargetListIndex(
-                                        currentListIndex = index,
-                                        item = item,
-                                        uri = uri,
-                                    )
-                                        ?: return@setFallbackNavigator false
-                                    listCoroutineScope.launch {
-                                        listState.animateScrollToItem(targetListIndex)
-                                    }
-                                    true
-                                }
-                            }
-                            StaticAiMarkdownNodeItem(
-                                item = item,
-                                maxWidth = bubbleMaxWidth,
-                                viewModel = viewModel,
-                                footnoteNavigationState = footnoteNavigation,
-                                onImageClick = { url ->
-                                    val now = SystemClock.elapsedRealtime()
-                                    if (now - lastImagePreviewAt > 500) {
-                                        lastImagePreviewAt = now
-                                        onImageClick(url)
-                                    }
-                                },
-                            )
-                        }
+                        is ChatListItem.AiMarkdownNode -> Unit // 已在上面的公共分块入口处理。
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
                             // 使用 Row + Arrangement.End，确保用户消息稳定靠右显示

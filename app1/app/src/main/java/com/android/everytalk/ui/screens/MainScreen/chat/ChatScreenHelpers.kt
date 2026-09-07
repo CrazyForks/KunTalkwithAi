@@ -185,9 +185,17 @@ internal fun isHistoryConversationReadyForInitialBottom(
     chatItems: List<ChatListItem>,
     laidOutItemCount: Int,
     requireLaidOutItemCount: Boolean = true,
+    messageItemsMatch: Boolean? = null,
 ): Boolean {
     if (isLoadingHistory || isLoadingHistoryData) return false
     if (requireMatchingScrollSession && currentConversationId != scrollSessionKey) return false
+
+    return (messageItemsMatch ?: historyMessageItemsMatch(messages, chatItems)) &&
+        (!requireLaidOutItemCount || laidOutItemCount >= chatItems.size)
+}
+
+/** 只比较数据，不依赖布局；由后台按消息快照计算，避免每个滚动/布局帧都扫描整段历史。 */
+internal fun historyMessageItemsMatch(messages: List<Message>, chatItems: List<ChatListItem>): Boolean {
 
     val renderedMessageIds = chatItems.mapNotNullTo(mutableSetOf()) { item ->
         when (item) {
@@ -224,8 +232,31 @@ internal fun isHistoryConversationReadyForInitialBottom(
         }
         .mapTo(mutableSetOf()) { message -> message.id }
 
-    return expectedMessageIds == renderedMessageIds &&
-        (!requireLaidOutItemCount || laidOutItemCount >= chatItems.size)
+    return expectedMessageIds == renderedMessageIds
+}
+
+private data class HistoryMessageReadiness(
+    val messages: List<Message>,
+    val items: List<ChatListItem>,
+    val matches: Boolean,
+)
+
+/** 布局只消费结果。数据变化后旧结果立即失效，防止拿上一个会话的 true 提前撤掉遮罩。 */
+@Composable
+internal fun rememberHistoryMessageItemsMatch(
+    messages: List<Message>,
+    chatItems: List<ChatListItem>,
+    enabled: Boolean,
+): Boolean {
+    // 同内容快照可能是新 List 对象，沿用同一输入，既避免重复计算，也避免旧引用导致永久等待。
+    val inputs = remember(messages, chatItems) { messages to chatItems }
+    val result by produceState<HistoryMessageReadiness?>(null, inputs, enabled) {
+        value = if (enabled) withContext(Dispatchers.Default) {
+            HistoryMessageReadiness(inputs.first, inputs.second, historyMessageItemsMatch(inputs.first, inputs.second))
+        } else null
+    }
+    val current = result
+    return enabled && current != null && current.messages === inputs.first && current.items === inputs.second && current.matches
 }
 
 @Composable

@@ -450,18 +450,11 @@ fun MikePenzMarkdownRenderer(
                         }
                     }
             }
-            val linkLogoIndex = remember(
-                isStreaming,
-                visiblePreparedMessage.markdown.takeUnless { isStreaming },
-                visiblePreparedMessage.details.takeUnless { isStreaming },
-                preparedMarkdownDocument?.linkLogoIndex,
-            ) {
-                resolveMarkdownLinkLogoIndex(
-                    isStreaming = isStreaming,
-                    preparedMessage = visiblePreparedMessage,
-                    preparedMarkdownDocument = preparedMarkdownDocument,
-                )
-            }
+            val linkLogoIndex = rememberMarkdownLinkLogoIndex(
+                isStreaming = isStreaming,
+                preparedMessage = visiblePreparedMessage,
+                preparedMarkdownDocument = preparedMarkdownDocument,
+            )
             val linkLogoRequests = linkLogoIndex.requests
             val linkLogoDefinitions = linkLogoIndex.definitions
             val linkLogoInlineContent = remember(linkLogoRequests) {

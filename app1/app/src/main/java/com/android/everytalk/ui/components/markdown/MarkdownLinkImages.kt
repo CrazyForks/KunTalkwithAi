@@ -145,6 +145,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
@@ -311,6 +313,39 @@ internal fun resolveMarkdownLinkLogoIndex(
     }
     return preparedMarkdownDocument?.linkLogoIndex
         ?: calculate(preparedMessageLinkLogoSource(preparedMessage))
+}
+
+/**
+ * 静态分块直接使用后台准备的索引；其他入口缺少索引时也只能在后台解析。
+ * 每份正文持有独立结果，切换内容即失效，避免旧任务覆盖新正文的链接定义。
+ * 流式期间不扫描持续增长的正文，结束后才计算一次。
+ */
+@Composable
+internal fun rememberMarkdownLinkLogoIndex(
+    isStreaming: Boolean,
+    preparedMessage: PreparedMessage,
+    preparedMarkdownDocument: PreparedMarkdownDocument?,
+    calculate: (String) -> MarkdownLinkLogoIndex = ::markdownLinkLogoIndex,
+): MarkdownLinkLogoIndex {
+    val result = remember(
+        isStreaming,
+        preparedMessage.markdown.takeUnless { isStreaming },
+        preparedMessage.details.takeUnless { isStreaming },
+        preparedMarkdownDocument?.linkLogoIndex,
+    ) {
+        mutableStateOf(
+            preparedMarkdownDocument?.linkLogoIndex?.takeUnless { isStreaming }
+                ?: MarkdownLinkLogoIndex(emptyList(), emptyMap()),
+        )
+    }
+    LaunchedEffect(result, calculate) {
+        if (!isStreaming && preparedMarkdownDocument?.linkLogoIndex == null) {
+            result.value = withContext(Dispatchers.Default) {
+                resolveMarkdownLinkLogoIndex(false, preparedMessage, preparedMarkdownDocument, calculate)
+            }
+        }
+    }
+    return result.value
 }
 
 internal fun markdownSingleAutolinkLogoRequest(
