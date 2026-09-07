@@ -10,6 +10,17 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class SkillInlineEditorTest {
+    @Test
+    fun `历史消息回填后再次发送保留Skill引用的顺序与版本`() {
+        val parts = listOf(
+            com.android.everytalk.data.DataClass.MessageContentPart.Text("先用 "),
+            com.android.everytalk.data.DataClass.MessageContentPart.SkillReference(reference),
+            com.android.everytalk.data.DataClass.MessageContentPart.Text(" 再分析\n附件"),
+        )
+        val restored = restoreSkillEditor("展示文字", parts)
+        assertEquals(parts, buildSkillContentParts(restored.value.text, restored.references))
+        assertEquals(restored.value.text.length, restored.value.selection.start)
+    }
     private val reference = MessageSkillReference(
         skillId = "local:test",
         displayName = "PDF",

@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -454,7 +455,10 @@ class ThinkingUiScrollComposeTest {
         assertTrue(composeRule.onAllNodesWithText("等待首个响应").fetchSemanticsNodes().isNotEmpty())
 
         composeRule.onNodeWithTag("reasoning-process-container").fetchSemanticsNode("")
-        composeRule.onNodeWithTag("reasoning-chain-live-status").fetchSemanticsNode("")
+        // 状态文字在可点击行内，默认语义树会合并到父节点；查原始节点并核对实际可见文字。
+        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+            .assertTextEquals("等待首个响应")
+            .assertIsDisplayed()
         assertTrue(
             composeRule.onAllNodesWithTag("reasoning-sheet-surface").fetchSemanticsNodes().isEmpty(),
         )
@@ -567,14 +571,16 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(2_100L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("reasoning-chain-live-status").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+            .assertTextEquals("调用工具 · search_docs")
+            .assertIsDisplayed()
         assertTrue(
             composeRule.onAllNodesWithTag("reasoning-sheet-surface").fetchSemanticsNodes().isEmpty(),
         )
     }
 
     @Test
-    fun `前导正文出现后工具组保持收起且可手动展开`() {
+    fun `回复仍在执行且前导正文出现后工具组默认收起并可手动展开收起`() {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             MaterialTheme {
@@ -592,6 +598,8 @@ class ThinkingUiScrollComposeTest {
                     ),
                     isReasoningStreaming = false,
                     isReasoningComplete = true,
+                    // 思考已结束但整条回复还在执行；不能让默认 false 把本场景误设为已完成历史消息。
+                    replyIsStreaming = true,
                     messageIsError = false,
                     mainContentHasStarted = true,
                     reasoningTextColor = Color.Black,
@@ -605,11 +613,22 @@ class ThinkingUiScrollComposeTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("reasoning-inline-status").fetchSemanticsNode("")
-        assertTrue(composeRule.onAllNodesWithText("运行 Agent · exec").fetchSemanticsNodes().isEmpty())
-        composeRule.onNodeWithTag("reasoning-chain-summary-1").performClick()
+        composeRule.onNodeWithTag("reasoning-chain-summaries").assertIsDisplayed()
+        composeRule.onNodeWithTag("reasoning-chain-tool-1-0").assertDoesNotExist()
+        composeRule.onNodeWithTag("reasoning-chain-summary-1").assertHasClickAction().performClick()
         composeRule.mainClock.advanceTimeBy(250L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("运行 Agent · exec").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-chain-tool-1-0").assertIsDisplayed()
+        composeRule.onNodeWithText("运行 Agent · exec").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("reasoning-chain-summary-1").performClick()
+        // 关闭自动时钟后，退出动画要等重组及后续帧完成；按节点移除等待，避免卡在动画末帧。
+        composeRule.mainClock.advanceTimeUntil(timeoutMillis = 2_000L) {
+            composeRule.onAllNodesWithTag("reasoning-chain-tool-1-0").fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-chain-tool-1-0").assertDoesNotExist()
+        composeRule.onNodeWithTag("reasoning-chain-summary-1").assertIsDisplayed()
     }
 
     @Test

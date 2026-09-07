@@ -394,6 +394,10 @@ class AgentRunStoreContinuationTest {
         val expanded = store.expandTranscript("session-expand", messages)
 
         assertEquals(listOf("user-1", "queued:steer-1"), expanded.map { it.id })
+
+        // 编辑追加消息后，可见历史停在该消息之前，内部旧指令也必须一起退出上下文。
+        val rewound = store.expandTranscript("session-expand", messages.take(2))
+        assertEquals(listOf("user-1", "assistant-1"), rewound.map { it.id })
     }
 
     @Test

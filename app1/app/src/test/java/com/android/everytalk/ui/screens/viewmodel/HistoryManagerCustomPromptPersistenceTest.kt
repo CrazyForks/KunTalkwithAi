@@ -34,6 +34,72 @@ import org.junit.Test
 
 class HistoryManagerCustomPromptPersistenceTest {
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `临时会话ID回退并复原时同步最近打开记录和历史索引`() = runTest {
+        for (imageMode in listOf(false, true)) {
+            val state = ViewModelStateHolder()
+            val scope = TestScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+            val persistence = mockk<DataPersistenceManager>(relaxed = true)
+            val history = HistoryManager(state, persistence, { a, b -> a == b }, {}, scope)
+            val conversation = if (imageMode) state._currentImageGenerationConversationId else state._currentConversationId
+            val messages = if (imageMode) state.imageGenerationMessages else state.messages
+            val loadedIndex = if (imageMode) state._loadedImageGenerationHistoryIndex else state._loadedHistoryIndex
+            val original = Message(id = "u1", text = "cs", sender = Sender.User)
+            val originalMessages = listOf(original, Message(id = "a1", text = "回答", sender = Sender.AI))
+            conversation.value = "temporary"
+            messages.addAll(originalMessages)
+            loadedIndex.value = 0
+            val controller = com.android.everytalk.statecontroller.controller.conversation.EditMessageController(
+                state, history, scope, kotlinx.coroutines.sync.Mutex(), { _, _ -> }, {},
+            )
+            try {
+                controller.requestEditMessage(original, imageMode)
+                advanceUntilIdle()
+                assertTrue(messages.isEmpty())
+                assertEquals(null, loadedIndex.value)
+                coVerify { persistence.rewindHistorySession("u1", emptyList(), imageMode, true) }
+                controller.restoreOriginalMessages("cs", state.selectedMediaItems, null, imageMode)
+                advanceUntilIdle()
+                assertEquals(originalMessages, messages.toList())
+                assertEquals(0, loadedIndex.value)
+                coVerify { persistence.rewindHistorySession("u1", originalMessages, imageMode, true) }
+            } finally {
+                scope.coroutineContext[Job]?.cancel()
+                advanceUntilIdle()
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `回退排在旧保存之后且首条消息回退会保存空记录`() = runTest {
+        val state = ViewModelStateHolder()
+        val scope = TestScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val persistence = mockk<DataPersistenceManager>(relaxed = true)
+        val history = HistoryManager(state, persistence, { a, b -> a == b }, {}, scope)
+        val message = Message(id = "rewind-user", text = "原问题", sender = Sender.User)
+        state.setCurrentConversationId(message.id)
+        state.messages.add(message)
+        state.isTextConversationDirty.value = true
+        try {
+            history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+            history.rewindConversation(message.id, emptyList(), false)
+            assertTrue(state._historicalConversations.value.isEmpty())
+            assertEquals(null, state._loadedHistoryIndex.value)
+            io.mockk.coVerifyOrder {
+                persistence.saveHistorySession(message.id, any(), false)
+                persistence.rewindHistorySession(message.id, emptyList(), false, true)
+            }
+            history.rewindConversation(message.id, listOf(message), false)
+            assertEquals(listOf(listOf(message)), state._historicalConversations.value)
+            assertEquals(0, state._loadedHistoryIndex.value)
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+            testScheduler.advanceUntilIdle()
+        }
+    }
+
     @Before
     fun setUp() {
         mockkStatic(android.util.Log::class)

@@ -27,6 +27,57 @@ import java.util.concurrent.Executor
 @Config(sdk = [34], application = android.app.Application::class)
 class RoomDataSourceBatchHistoryTest {
 
+    @Test
+    fun `回退首条消息同时清空历史和最近记录并保留附件文件`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val attachment = java.io.File(context.cacheDir, "rewind-image.png").apply { writeText("image") }
+        try {
+            val original = Message(id = "rewind", text = "图片", sender = Sender.User,
+                attachments = listOf(com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap("", "photo", filePath = attachment.path)))
+            dataSource.saveLoadedHistorySession("rewind", listOf(original), false)
+            dataSource.saveLastOpenChat(listOf(original))
+
+            dataSource.rewindHistorySession("rewind", emptyList(), false, true)
+
+            assertTrue(database.chatDao().getMessagesForSession("rewind").isEmpty())
+            assertTrue(dataSource.loadLastOpenChat().isEmpty())
+            assertTrue(attachment.isFile)
+        } finally {
+            attachment.delete()
+        }
+    }
+
+    @Test
+    fun `回退更新最近记录失败时历史删除也整体回滚`() = runBlocking {
+        val original = Message(id = "rewind", text = "原消息", sender = Sender.User)
+        dataSource.saveLoadedHistorySession("rewind", listOf(original), false)
+        dataSource.saveLastOpenChat(listOf(original))
+        assertEquals(listOf("原消息"), database.chatDao().getMessagesForSession("rewind").map { it.text })
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_rewind BEFORE DELETE ON messages " +
+                "WHEN OLD.sessionId = 'last_open_chat_v1' BEGIN SELECT RAISE(ABORT, '模拟写入失败'); END",
+        )
+
+        val result = runCatching { dataSource.rewindHistorySession("rewind", emptyList(), false, true) }
+
+        assertTrue(result.isFailure)
+        assertEquals(listOf("原消息"), database.chatDao().getMessagesForSession("rewind").map { it.text })
+        assertEquals(listOf(original.id to original.text), dataSource.loadLastOpenChat().map { it.id to it.text })
+    }
+
+    @Test
+    fun `回退中间消息后历史和最近快照各自保留前文且消息ID一致`() = runBlocking {
+        val first = Message(id = "first", text = "保留", sender = Sender.User)
+        val second = Message(id = "second", text = "编辑", sender = Sender.User)
+        for (isImage in listOf(false, true)) {
+            dataSource.saveLoadedHistorySession(first.id, listOf(first, second), isImage)
+            dataSource.rewindHistorySession(first.id, listOf(first), isImage, true)
+            assertEquals(listOf(first.id), database.chatDao().getMessagesForSession(first.id).map { it.id })
+            val snapshot = if (isImage) dataSource.loadLastOpenImageGenerationChat() else dataSource.loadLastOpenChat()
+            assertEquals(listOf(first.id to first.text), snapshot.map { it.id to it.text })
+        }
+    }
+
     private lateinit var database: AppDatabase
     private lateinit var dataSource: RoomDataSource
     private val queries = Collections.synchronizedList(mutableListOf<String>())

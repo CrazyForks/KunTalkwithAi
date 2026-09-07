@@ -10,6 +10,18 @@ import java.io.File
 /** 最小检查：锁定主按钮矩阵和 Pending 的原位编辑、条件抢占、恢复语义。 */
 class PendingMessageInteractionTest {
     @Test
+    fun `未修改历史消息显示复原有改动显示发送写库中不可点击`() {
+        assertEquals(ComposerPrimaryAction.RESTORE, resolveComposerPrimaryAction(
+            ChatRunState.Idle, ComposerMode.Normal, true, false, canRestoreMessage = true,
+        ))
+        assertEquals(ComposerPrimaryAction.SEND, resolveComposerPrimaryAction(
+            ChatRunState.Idle, ComposerMode.Normal, true, false, canRestoreMessage = false,
+        ))
+        assertEquals(ComposerPrimaryAction.LOADING, resolveComposerPrimaryAction(
+            ChatRunState.Idle, ComposerMode.Normal, true, false, isConvertingLongText = true, canRestoreMessage = true,
+        ))
+    }
+    @Test
     fun `主按钮遵循空闲流式暂停和编辑矩阵`() {
         assertEquals(
             ComposerPrimaryAction.SEND,
