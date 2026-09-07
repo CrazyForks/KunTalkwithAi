@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.data.database.Converters
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -16,6 +17,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExecutionStepTest {
+    @Test
+    fun `编写状态不产生执行记录且完整工具调用会替换它`() {
+        val writingEvent = AppStreamEvent.ExecutionStatusUpdate(TOOL_CALL_WRITING_STATUS)
+        val writing = applyExecutionStatusEventToMessage(
+            Message(id = "writing", text = "先检查环境。", sender = Sender.AI, contentStarted = true),
+            writingEvent,
+        )
+        assertTrue(writingEvent.requiresOrderedContentFlush())
+        assertEquals(TOOL_CALL_WRITING_STATUS, writing.executionStatus)
+        assertTrue(writing.executionSteps.isEmpty())
+        assertTrue(writing.executionTrace.isEmpty())
+
+        val executing = applyToolCallEventToMessage(writing, AppStreamEvent.ToolCall(
+            id = "call-1",
+            name = ComputerToolNames.EXEC,
+            argumentsObj = buildJsonObject { put("command", "pwd") },
+        ))
+        assertEquals(null, executing.executionStatus)
+        assertFalse(executing.currentWebSearchStage.isNullOrBlank())
+        assertEquals(1, executing.executionSteps.size)
+        assertFalse(executing.executionSteps.single().completed)
+    }
+
     @Test
     fun `正文缓冲只在真实输出边界前强制冲刷`() {
         assertFalse(AppStreamEvent.Content("正文").requiresOrderedContentFlush())
@@ -62,6 +86,7 @@ class ExecutionStepTest {
             listOf("先读取系统配置。", "uname -a", "再检查磁盘占用。", "df -h"),
             trace.map { event ->
                 when (event) {
+                    is ExecutionTraceEvent.UserMessageBoundary -> "user:${event.messageId}"
                     is ExecutionTraceEvent.Content -> event.text
                     is ExecutionTraceEvent.Reasoning -> event.text
                     is ExecutionTraceEvent.Tool -> event.step.labels.single()

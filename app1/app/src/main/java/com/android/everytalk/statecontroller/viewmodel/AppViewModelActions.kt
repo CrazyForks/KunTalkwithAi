@@ -42,8 +42,7 @@ import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import android.graphics.Bitmap
 import android.net.Uri
-import android.widget.Toast
-import com.android.everytalk.util.locale.localizeUiMessage
+import com.android.everytalk.util.AppToast
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -410,10 +409,7 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.showToast(message: String) {
-        viewModelScope.launch(Dispatchers.Main) {
-            val context = getApplication<Application>()
-            Toast.makeText(context, context.localizeUiMessage(message), Toast.LENGTH_SHORT).show()
-        }
+        AppToast.show(getApplication<Application>(), message)
     }
 
     internal fun AppViewModel.setConversationSearchActive(isActive: Boolean) {
@@ -1008,10 +1004,24 @@ import java.util.TimeZone
     internal fun AppViewModel.onCancelAPICall() {
         // 根据当前模式取消对应的流/任务，确保图像模式可被中止
         val isImageMode = simpleModeManager.isInImageMode()
-        apiHandler.cancelCurrentApiJob("用户取消操作", isNewMessageSend = false, isImageGeneration = isImageMode)
+        apiHandler.cancelCurrentApiJob("用户取消操作", isNewMessageSend = false, isImageGeneration = isImageMode, showFeedback = true)
     }
 
     internal fun AppViewModel.toggleStreamingPause() = streamingControls.togglePause()
+
+    // 明确动作而不是 toggle，连续点击或重组延迟不能把 Pause 反向变成 Resume。
+    internal fun AppViewModel.pauseStreaming() = streamingControls.pause()
+
+    /** 只接受等待安全边界时的第二次点击；旧页面或尚未重组的按钮不能重复取消/误停新 Run。 */
+    internal fun AppViewModel.forceStopPendingPause(expectedMessageId: String?) {
+        if (expectedMessageId == null ||
+            stateHolder._currentTextStreamingAiMessageId.value != expectedMessageId ||
+            stateHolder._isRemoteCancellationPending.value ||
+            apiHandler.agentRunControlSnapshots.value[expectedMessageId]?.state !=
+                com.android.everytalk.data.agent.AgentRunControlState.PAUSE_REQUESTED
+        ) return
+        apiHandler.cancelCurrentApiJob("等待安全暂停时用户再次点击停止", isImageGeneration = false, showFeedback = true)
+    }
 
 
     internal fun AppViewModel.startNewChat() {

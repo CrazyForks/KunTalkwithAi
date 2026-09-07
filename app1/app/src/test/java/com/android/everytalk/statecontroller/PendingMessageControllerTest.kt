@@ -396,13 +396,33 @@ class PendingMessageControllerTest {
         assertTrue(dao.observePendingMessages("conversation").first().isEmpty())
     }
 
+    @Test
+    fun `缺失控制记录不会伪造暂停也不会阻塞空闲队列`() = runTest {
+        val dao = database.chatDao()
+        dao.enqueuePendingMessage(pending("queued", "继续", 1))
+        val running = MutableStateFlow(true)
+        val sent = CompletableDeferred<String>()
+        val controller = controller(
+            isRunning = running,
+            agentRunControlState = MutableStateFlow(null),
+            dispatch = { message, accepted, _, _ ->
+                accepted()
+                sent.complete(message.id)
+            },
+        )
+        controller.runState.first { it == ChatRunState.Streaming }
+        assertTrue(!sent.isCompleted)
+        running.value = false
+        assertEquals("queued", sent.await())
+    }
+
     private fun kotlinx.coroutines.test.TestScope.controller(
         isRunning: MutableStateFlow<Boolean>,
         replaceComposer: (String) -> Unit = {},
         steer: () -> Boolean = { true },
         recordSteered: suspend (PendingMessageEntity) -> Unit = {},
         isAbortInProgress: MutableStateFlow<Boolean> = MutableStateFlow(false),
-        agentRunControlState: MutableStateFlow<AgentRunControlState> =
+        agentRunControlState: kotlinx.coroutines.flow.StateFlow<AgentRunControlState?> =
             MutableStateFlow(AgentRunControlState.RUNNING),
         dispatch: (PendingMessageEntity, () -> Unit, () -> Unit, () -> Unit) -> Unit,
     ) = PendingMessageController(

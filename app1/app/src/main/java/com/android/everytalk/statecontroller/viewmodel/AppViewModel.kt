@@ -347,13 +347,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** 当前可见 AgentRun 的真实安全暂停状态。UI 只消费 Coordinator 投影。 */
-    internal val currentAgentRunControlState: StateFlow<AgentRunControlState> =
+    internal val currentAgentRunControlState: StateFlow<AgentRunControlState?> =
         kotlinx.coroutines.flow.combine(
             stateHolder._currentTextStreamingAiMessageId,
             apiHandler.agentRunControlSnapshots,
         ) { messageId, snapshots ->
-            messageId?.let(snapshots::get)?.state ?: AgentRunControlState.RUNNING
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, AgentRunControlState.RUNNING)
+            messageId?.let(snapshots::get)?.state
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** Pending 复用现有 Room、Composer 状态和 MessageSender，不建立第二套发送链路。 */
     internal val pendingMessageController: PendingMessageController by lazy {
@@ -565,6 +565,49 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val computerSelections get() = computerManager.selections
     val pendingComputerAgentApprovals = apiHandler.pendingAgentApprovals
     val pendingInterventions = apiHandler.pendingInterventions
+
+    fun resolveIntervention(suspensionId: String, expectedVersion: Long, resolutionNonce: String) =
+        apiHandler.resolveIntervention(suspensionId, expectedVersion, resolutionNonce)
+
+    fun resolveEphemeralIntervention(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        secret: CharArray,
+    ) = apiHandler.resolveEphemeralIntervention(suspensionId, expectedVersion, resolutionNonce, secret)
+
+    fun resolveDurableIntervention(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        secureReference: String,
+    ) = apiHandler.resolveDurableIntervention(
+        suspensionId,
+        expectedVersion,
+        resolutionNonce,
+        secureReference,
+    )
+
+    fun rejectIntervention(suspensionId: String, expectedVersion: Long) =
+        apiHandler.rejectIntervention(suspensionId, expectedVersion)
+
+    fun createAndResolveAuthorizationIntervention(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        secret: CharArray,
+    ) = apiHandler.createAndResolveAuthorizationIntervention(
+        suspensionId,
+        expectedVersion,
+        resolutionNonce,
+        secret,
+    )
+
+    fun confirmUnknownInterventionDelivered(suspensionId: String, expectedVersion: Long) =
+        apiHandler.confirmUnknownInterventionDelivered(suspensionId, expectedVersion)
+
+    fun continueAfterUnknownIntervention(suspensionId: String, expectedVersion: Long) =
+        apiHandler.continueAfterUnknownIntervention(suspensionId, expectedVersion)
     val pendingAgentEnableApproval = kotlinx.coroutines.flow.combine(
         apiHandler.pendingAgentEnableApprovals,
         stateHolder._currentConversationId,

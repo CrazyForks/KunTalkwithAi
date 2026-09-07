@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class ModelFetchManager {
     private val _fetchedModels = MutableStateFlow<List<String>>(emptyList())
     val fetchedModels: StateFlow<List<String>> = _fetchedModels.asStateFlow()
-    private var fetchedCatalogByModel: Map<String, ModelCapabilityCandidate> = emptyMap()
+    private var fetchedCatalogByModel: Map<String, List<ModelCapabilityCandidate>> = emptyMap()
     
     private val _isRefreshingModels = MutableStateFlow<Set<String>>(emptySet())
     val isRefreshingModels: StateFlow<Set<String>> = _isRefreshingModels.asStateFlow()
@@ -22,11 +22,15 @@ class ModelFetchManager {
     }
 
     fun setFetchedCatalog(catalog: List<ModelCapabilityCandidate>) {
-        fetchedCatalogByModel = catalog.associateBy { it.modelId.lowercase() }
-        _fetchedModels.value = catalog.map(ModelCapabilityCandidate::modelId)
+        fetchedCatalogByModel = catalog.groupBy { it.modelId.lowercase() }
+        _fetchedModels.value = fetchedCatalogByModel.values.map { it.first().modelId }
     }
 
     fun capabilityFor(modelId: String): ModelCapabilityCandidate? =
+        capabilitiesFor(modelId)?.firstOrNull()
+
+    /** 保留所有来源，供添加和刷新按字段优先级解析；null 表示尚未获取这个模型。 */
+    fun capabilitiesFor(modelId: String): List<ModelCapabilityCandidate>? =
         fetchedCatalogByModel[modelId.trim().lowercase()]
     
     fun setRefreshingModel(configId: String?) {

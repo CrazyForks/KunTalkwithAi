@@ -411,6 +411,13 @@ internal fun reduceExecutionTrace(
     event: AppStreamEvent,
     nowMillis: Long = System.currentTimeMillis(),
 ): List<ExecutionTraceEvent> = when (event) {
+    is AppStreamEvent.AgentFollowUpAccepted -> if (trace.any {
+        it is ExecutionTraceEvent.UserMessageBoundary && it.messageId == event.messageId
+    }) {
+        trace
+    } else {
+        trace + ExecutionTraceEvent.UserMessageBoundary(event.messageId, nowMillis)
+    }
     is AppStreamEvent.Reasoning -> if (event.signatureOnlyUpdate || event.redacted) {
         trace
     } else {
@@ -714,6 +721,8 @@ internal class ApiHandlerStreamProcessor(
                     messageList[messageIndex] = updatedMessage
                 }
                 is AppStreamEvent.AgentFollowUpAccepted -> {
+                    val latest = latestMessageForUpdate()
+                    updatedMessage = latest.copy(executionTrace = reduceExecutionTrace(latest.executionTrace, appEvent))
                     if (messageList.none { it.id == appEvent.messageId }) {
                         val imageUrls = appEvent.attachments.mapNotNull { attachment ->
                             when (attachment) {

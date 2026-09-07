@@ -2,6 +2,8 @@ package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.data.agent.AgentRunStatus
+import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.util.debug.PerformanceMonitor
 import io.mockk.every
@@ -144,6 +146,85 @@ class ViewModelStateHolderStreamingStateTest {
         assertFalse(stateHolder._isTextApiCalling.value)
         assertNull(stateHolder._currentTextStreamingAiMessageId.value)
     }
+
+    @Test
+    fun `后台完成后补齐半截正文并清除停止按钮`() {
+        val message = prepareRestoration()
+        assertTrue(stateHolder.reconcileAgentRun(run(AgentRunStatus.COMPLETED), fullTrace(), message, false))
+        assertEquals("完整正文", stateHolder.messages.single().text)
+        assertEquals("完整思考", stateHolder.messages.single().reasoning)
+        assertEquals("完整正文", stateHolder.messages.single().orderedContentText())
+        assertFalse(stateHolder._isTextApiCalling.value)
+        assertNull(stateHolder._currentTextStreamingAiMessageId.value)
+    }
+
+    @Test
+    fun `读取期间新内容和用户停止不会被旧快照覆盖`() {
+        val baseline = prepareRestoration()
+        stateHolder.messages[0] = baseline.copy(text = "更新的正文")
+        assertFalse(stateHolder.reconcileAgentRun(run(AgentRunStatus.COMPLETED), fullTrace(), baseline, false))
+        assertEquals("更新的正文", stateHolder.messages.single().text)
+        stateHolder.messages[0] = baseline.copy(executionStatus = "任务已取消", executionFinishedAt = 3L)
+        stateHolder.detachTextAgentUi(baseline.id)
+        assertFalse(stateHolder.reconcileAgentRun(run(AgentRunStatus.MODEL_CONTINUATION_PENDING), fullTrace(), baseline, false))
+        assertFalse(stateHolder._isTextApiCalling.value)
+    }
+
+    @Test
+    fun `旧任务的终态不能清除新回复或跨会话写入`() {
+        val baseline = prepareRestoration()
+        stateHolder.detachTextAgentUi(baseline.id)
+        stateHolder.messages.add(Message(id = "new", text = "", sender = Sender.AI))
+        stateHolder.attachTextAgentUi("new")
+        assertTrue(stateHolder.reconcileAgentRun(run(AgentRunStatus.COMPLETED), fullTrace(), baseline, false))
+        assertEquals("new", stateHolder._currentTextStreamingAiMessageId.value)
+        stateHolder._currentConversationId.value = "other-session"
+        val updated = stateHolder.messages[0]
+        assertFalse(stateHolder.reconcileAgentRun(run(AgentRunStatus.CANCELLED), emptyList(), updated, false))
+        assertEquals(updated, stateHolder.messages[0])
+    }
+
+    @Test
+    fun `模型重连等待不能被当成完成而孤立本地任务必须显示等待确认`() {
+        val baseline = prepareRestoration()
+        stateHolder.reconcileAgentRun(run(AgentRunStatus.MODEL_CONTINUATION_PENDING), fullTrace(), baseline, false)
+        assertTrue(stateHolder._isTextApiCalling.value)
+        assertEquals("正在恢复回复...", stateHolder.messages.single().executionStatus)
+        val updated = stateHolder.messages.single()
+        stateHolder.reconcileAgentRun(run(AgentRunStatus.STREAMING_MODEL), fullTrace(), updated, false)
+        assertFalse(stateHolder._isTextApiCalling.value)
+        assertEquals("等待恢复确认", stateHolder.messages.single().executionStatus)
+        assertNull(stateHolder.messages.single().executionFinishedAt)
+    }
+
+    @Test
+    fun `执行器活跃时旧持久内容不能覆盖实时增量`() {
+        val baseline = prepareRestoration().copy(text = "实时更新")
+        stateHolder.messages[0] = baseline
+        stateHolder.reconcileAgentRun(run(AgentRunStatus.STREAMING_MODEL), fullTrace(), baseline, true)
+        assertEquals("实时更新", stateHolder.messages.single().text)
+        assertTrue(stateHolder._isTextApiCalling.value)
+    }
+
+    private fun prepareRestoration(): Message {
+        stateHolder._currentConversationId.value = "session-1"
+        val message = Message(id = "assistant-1", text = "完整", sender = Sender.AI)
+        stateHolder.messages.add(message)
+        stateHolder.attachTextAgentUi(message.id)
+        return message
+    }
+
+    private fun fullTrace(): List<ExecutionTraceEvent> = listOf(
+        ExecutionTraceEvent.Reasoning("完整思考", 1L),
+        ExecutionTraceEvent.Content("完整正文", 2L),
+    )
+
+    private fun run(status: AgentRunStatus) = AgentRunEntity(
+        id = "run-1", sessionId = "session-1", userMessageId = "user-1",
+        visibleAssistantMessageId = "assistant-1", configIdSnapshot = null,
+        requestSnapshotJson = null, status = status.name, currentRequestOrdinal = 1,
+        terminalReason = null, createdAt = 1L, updatedAt = 2L,
+    )
 
     private fun Message.orderedContentText(): String = executionTrace
         .filterIsInstance<ExecutionTraceEvent.Content>()

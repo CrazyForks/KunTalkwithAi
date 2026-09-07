@@ -429,7 +429,7 @@ class ComputerManager(
         )
     }
 
-    /** 停止按钮取消当前 AgentRun 的全部前台和后台受管远端任务。 */
+    /** 停止按钮仅取消当前 Run 等待中的命令，已交付的后台服务由独立管理入口处理。 */
     fun cancelActiveExecutions(
         conversationId: String,
         runId: String? = null,

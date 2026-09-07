@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
@@ -38,6 +39,50 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.flowOn
 import androidx.compose.runtime.snapshotFlow
 import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * AI 缓存只保存自身的渲染段；每次投影时按接收边界插入真实用户项。
+ * 不改变消息存储顺序、Run ID 或模型上下文。尚未到达显示层的用户消息不占位也不被丢弃。
+ */
+internal fun interleaveQueuedUserMessages(
+    messages: List<Message>,
+    itemGroups: List<List<ChatListItem>>,
+): List<ChatListItem> {
+    val userItems = messages.indices.filter { messages[it].sender == Sender.User }
+        .associate { messages[it].id to itemGroups[it] }
+    val movedIds = hashSetOf<String>()
+    val boundaries = messages.map { message ->
+        if (message.sender != Sender.AI || message.executionTrace.none { it is ExecutionTraceEvent.UserMessageBoundary }) {
+            emptyList()
+        } else {
+            orderedAiOutputSegments(message.executionTrace).mapIndexedNotNull { index, segment ->
+                val id = (segment as? OrderedAiOutputSegment.UserMessageBoundary)?.messageId
+                if (id != null && !userItems[id].isNullOrEmpty() && movedIds.add(id)) index to id else null
+            }
+        }
+    }
+    return buildList {
+        messages.indices.forEach { groupIndex ->
+            if (messages[groupIndex].sender == Sender.User && messages[groupIndex].id in movedIds) return@forEach
+            val pending = boundaries[groupIndex]
+            var boundaryIndex = 0
+            fun insertBefore(segmentIndex: Int) {
+                while (boundaryIndex < pending.size && pending[boundaryIndex].first < segmentIndex) {
+                    addAll(userItems.getValue(pending[boundaryIndex++].second))
+                }
+            }
+            itemGroups[groupIndex].forEach { item ->
+                insertBefore(when (item) {
+                    is ChatListItem.AiMessageContentSegment -> item.segmentIndex
+                    is ChatListItem.AiMessageProcessSegment -> item.segmentIndex
+                    else -> Int.MAX_VALUE // 末尾边界在 footer/error 之前，不能落回整段回答之后。
+                })
+                add(item)
+            }
+            insertBefore(Int.MAX_VALUE)
+        }
+    }
+}
 
 /**
  * 将 AppViewModel 中与“AI气泡状态 + ChatListItem 构建”相关的大段逻辑外置。
@@ -160,7 +205,8 @@ open class MessageItemsController(
     private fun resolveStreamingStageText(message: Message, _elapsedMs: Long, reasoningComplete: Boolean = false): String? {
         val hasVisibleContent = message.contentStarted || message.text.isNotBlank()
         val hasAgentLoop = message.executionSteps.isNotEmpty()
-        if (!hasVisibleContent || hasAgentLoop) {
+        // 首次编写工具时还没有 executionSteps，但前导正文之后仍需显示这段真实进度。
+        if (!hasVisibleContent || hasAgentLoop || message.executionStatus == TOOL_CALL_WRITING_STATUS) {
             message.executionStatus?.takeIf { it.isNotBlank() }?.let { status ->
                 formatStatusText(status)?.let { return it }
             }
@@ -261,7 +307,7 @@ open class MessageItemsController(
             val renderableMessages = filterRenderableMessages(messages)
             retainCurrentMessageState(renderableMessages, chatListItemCache)
             liveTextMessageIds.retainAll(renderableMessages.mapTo(HashSet()) { it.id })
-            renderableMessages
+            val itemGroups = renderableMessages
                 .map { message ->
                     when (message.sender) {
                         Sender.AI -> {
@@ -300,7 +346,7 @@ open class MessageItemsController(
                                 ?.filterIsInstance<ChatListItem.AiMessageFooter>()
                                 ?.firstOrNull()
                             val hasOrderedOutput = message.executionTrace.any {
-                                it is ExecutionTraceEvent.Content
+                                it is ExecutionTraceEvent.Content || it is ExecutionTraceEvent.UserMessageBoundary
                             }
                             val expectedHasFooter = !message.isError && if (hasOrderedOutput) {
                                 !isCurrentlyStreaming
@@ -383,7 +429,7 @@ open class MessageItemsController(
                         else -> createOtherMessageItems(message)
                     }
                 }
-                .flatten()
+            interleaveQueuedUserMessages(renderableMessages, itemGroups)
         }
         .distinctUntilChanged()
         .flowOn(Dispatchers.Default)
@@ -591,7 +637,7 @@ open class MessageItemsController(
 
         if (
             !isImageGeneration &&
-            message.executionTrace.any { it is ExecutionTraceEvent.Content }
+            message.executionTrace.any { it is ExecutionTraceEvent.Content || it is ExecutionTraceEvent.UserMessageBoundary }
         ) {
             return createOrderedAiOutputItems(
                 message = message,
@@ -754,10 +800,24 @@ open class MessageItemsController(
         state: com.android.everytalk.ui.state.AiBubbleState,
         reasoningComplete: Boolean,
     ): List<ChatListItem> {
-        val segments = orderedAiOutputSegments(message.executionTrace)
+        val segments = orderedAiOutputSegments(message.executionTrace).toMutableList()
         val replyIsStreaming = state is com.android.everytalk.ui.state.AiBubbleState.Connecting ||
             state is com.android.everytalk.ui.state.AiBubbleState.Reasoning ||
             state is com.android.everytalk.ui.state.AiBubbleState.Streaming
+        // 编写阶段还没有完整工具记录。追加临时过程段，后续真实工具沿用同一列表位置；
+        // 不把未执行的操作写入历史，停止或失败后也不会残留“正在编写”。
+        if (replyIsStreaming && message.executionStatus == TOOL_CALL_WRITING_STATUS &&
+            segments.lastOrNull() !is OrderedAiOutputSegment.Process
+        ) {
+            segments += OrderedAiOutputSegment.Process(
+                events = emptyList(),
+                detailStartIndex = message.executionTrace.count {
+                    it is ExecutionTraceEvent.Reasoning || it is ExecutionTraceEvent.Tool
+                },
+                startedAtMillis = null,
+                finishedAtMillis = null,
+            )
+        }
         val lastProcessIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Process }
         val processCount = segments.count { it is OrderedAiOutputSegment.Process }
         // 正文已经继续输出时，前一个过程段已经结束，不能继续沿用整条回复的计时器。
@@ -797,6 +857,8 @@ open class MessageItemsController(
             }
             segments.forEachIndexed { segmentIndex, segment ->
                 when (segment) {
+                    // 用户项由最终投影插入，避免缓存持有过期用户内容或重复气泡。
+                    is OrderedAiOutputSegment.UserMessageBoundary -> Unit
                     is OrderedAiOutputSegment.Content -> if (segment.text.isNotBlank()) {
                         val isStreamingSegment = replyIsStreaming && segmentIndex == segments.lastIndex
                         val segmentMessage = Message(
@@ -827,7 +889,7 @@ open class MessageItemsController(
                         // 旧消息没有分段时间。只有整条回复仅含一个过程段时，才沿用旧的总耗时；
                         // 多个旧过程段不再全部显示同一个伪造时间。
                         val useLegacyWholeMessageTiming =
-                            segment.startedAtMillis == null && processCount == 1
+                            segment.events.isNotEmpty() && segment.startedAtMillis == null && processCount == 1
                         val segmentStartedAt = segment.startedAtMillis
                             ?: message.timestamp.takeIf { useLegacyWholeMessageTiming }
                         val segmentFinishedAt = segment.finishedAtMillis

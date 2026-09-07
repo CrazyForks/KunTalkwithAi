@@ -22,7 +22,7 @@ class StreamingControls(
     private val stateHolder: ViewModelStateHolder,
     private val apiHandler: ApiHandler,
     private val scope: CoroutineScope,
-    private val agentRunControlState: StateFlow<AgentRunControlState>,
+    private val agentRunControlState: StateFlow<AgentRunControlState?>,
     private val requestPause: () -> Boolean,
     private val resumeAgent: () -> Boolean,
     private val isImageModeProvider: () -> Boolean,
@@ -41,7 +41,8 @@ class StreamingControls(
     fun togglePause() {
         when (agentRunControlState.value) {
             AgentRunControlState.RUNNING -> pause()
-            AgentRunControlState.PAUSE_REQUESTED -> Unit
+            AgentRunControlState.PAUSE_REQUESTED -> showSnackbar("正在等待当前步骤结束，可以点击停止终止任务")
+            null -> reconcileMissingRun()
             AgentRunControlState.PAUSED -> resume()
         }
     }
@@ -49,12 +50,24 @@ class StreamingControls(
     fun pause() {
         if (agentRunControlState.value == AgentRunControlState.RUNNING && requestPause()) {
             showSnackbar("正在安全暂停")
+        } else {
+            reconcileMissingRun()
         }
     }
 
     fun resume() {
         if (agentRunControlState.value != AgentRunControlState.RUNNING && resumeAgent()) {
             flushIfResumed()
+        } else {
+            reconcileMissingRun()
+        }
+    }
+
+    /** 控制记录失效时重新核对持久状态，不能把失败的按钮动作静默吞掉。 */
+    private fun reconcileMissingRun() {
+        showSnackbar("当前任务状态已变化，正在核对")
+        scope.launch {
+            apiHandler.restoreVisibleAgentState()
         }
     }
 

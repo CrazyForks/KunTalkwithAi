@@ -13,10 +13,9 @@ import com.android.everytalk.util.image.ImageHandlingLimits
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import android.widget.Toast
+import com.android.everytalk.util.AppToast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import com.android.everytalk.util.locale.localizeUiMessage
 
 /**
  * MediaController
@@ -30,13 +29,7 @@ class MediaController(
 ) {
 
     private suspend fun showToast(message: String) {
-        withContext(Dispatchers.Main) {
-            Toast.makeText(
-                application,
-                application.localizeUiMessage(message),
-                Toast.LENGTH_SHORT,
-            ).show()
-        }
+        AppToast.show(application, message)
     }
 
     fun downloadImage(url: String) {

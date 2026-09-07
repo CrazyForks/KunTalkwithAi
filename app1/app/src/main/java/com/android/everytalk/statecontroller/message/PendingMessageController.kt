@@ -64,7 +64,7 @@ internal class PendingMessageController(
     private val currentConversationId: StateFlow<String>,
     private val isApiCalling: StateFlow<Boolean>,
     private val isAbortInProgress: StateFlow<Boolean>,
-    private val agentRunControlState: StateFlow<AgentRunControlState>,
+    private val agentRunControlState: StateFlow<AgentRunControlState?>,
     private val hasComposerContent: () -> Boolean,
     private val replaceComposer: (String, List<SelectedMediaItem>) -> Unit,
     private val persistAttachments: suspend (List<SelectedMediaItem>, String) -> List<SelectedMediaItem>?,
@@ -328,7 +328,7 @@ internal class PendingMessageController(
         scope.launch {
             operationMutex.withLock {
                 if (
-                    agentRunControlState.value != AgentRunControlState.RUNNING ||
+                    agentRunControlState.value in setOf(AgentRunControlState.PAUSED, AgentRunControlState.PAUSE_REQUESTED) ||
                     isAbortInProgress.value ||
                     isApiCalling.value ||
                     activeDispatchId != null

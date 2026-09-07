@@ -1,5 +1,7 @@
 package com.android.everytalk.statecontroller.facade
 
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
+
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ExecutionStep
@@ -31,6 +33,94 @@ import org.junit.Before
 import org.junit.Test
 
 class MessageItemsControllerStatusTest {
+
+    @Test
+    fun `调整后的回答位于用户气泡下面且仍使用原AI消息`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val ai = Message(
+            id = "same-ai", text = "旧回答新回答", sender = Sender.AI, contentStarted = true,
+            executionTrace = listOf(
+                ExecutionTraceEvent.Content("旧回答"),
+                ExecutionTraceEvent.UserMessageBoundary("steer-1"),
+                ExecutionTraceEvent.Content("新回答"),
+            ),
+        )
+        controller.stateHolder.messages.addAll(listOf(ai, Message(id = "steer-1", text = "调整方向", sender = Sender.User)))
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = ai.id
+        Snapshot.sendApplyNotifications()
+        val items = controller.chatListItemsForTest()
+
+        assertEquals(listOf("旧回答", "调整方向", "新回答"), timelineTexts(items))
+        val contents = items.filterIsInstance<ChatListItem.AiMessageContentSegment>()
+        assertEquals(listOf(ai.id, ai.id), contents.map { it.sourceMessageId })
+        assertEquals(listOf(false, true), contents.map { it.isStreaming })
+        assertEquals(2, controller.stateHolder.messages.size)
+    }
+
+    @Test
+    fun `多次调整和末尾边界均按接收顺序插入且不重复用户气泡`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.addAll(listOf(
+            Message(id = "ai", text = "甲乙", sender = Sender.AI, contentStarted = true,
+                executionTrace = listOf(
+                    ExecutionTraceEvent.Content("甲"),
+                    ExecutionTraceEvent.UserMessageBoundary("u1"),
+                    ExecutionTraceEvent.Content("乙"),
+                    ExecutionTraceEvent.UserMessageBoundary("u2"),
+                )),
+            Message(id = "u1", text = "调整一", sender = Sender.User),
+            Message(id = "u2", text = "调整二", sender = Sender.User),
+        ))
+        Snapshot.sendApplyNotifications()
+        val items = controller.chatListItemsForTest()
+        assertEquals(listOf("甲", "调整一", "乙", "调整二"), timelineTexts(items))
+        assertTrue(items.last() is ChatListItem.AiMessageFooter)
+        assertEquals(items.size, items.map { it.stableId }.distinct().size)
+    }
+
+    @Test
+    fun `尚未消费的调整消息保持原位置且无边界消息不会被隐藏`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.addAll(listOf(
+            Message(id = "ai", text = "回答", sender = Sender.AI, contentStarted = true,
+                executionTrace = listOf(
+                    ExecutionTraceEvent.Content("回答"),
+                    ExecutionTraceEvent.UserMessageBoundary("not-loaded"),
+                )),
+            Message(id = "queued", text = "尚未消费", sender = Sender.User),
+        ))
+        Snapshot.sendApplyNotifications()
+        assertEquals(listOf("回答", "尚未消费"), timelineTexts(controller.chatListItemsForTest()))
+    }
+
+    @Test
+    fun `只有思考工具的回复也在调整边界分段且详情索引不计用户消息`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.addAll(listOf(
+            Message(id = "ai", text = "", sender = Sender.AI,
+                executionTrace = listOf(
+                    ExecutionTraceEvent.Tool(completedToolStep()),
+                    ExecutionTraceEvent.UserMessageBoundary("u1"),
+                    ExecutionTraceEvent.Reasoning("调整后的思考"),
+                )),
+            Message(id = "u1", text = "调整方向", sender = Sender.User),
+        ))
+        Snapshot.sendApplyNotifications()
+        val items = controller.chatListItemsForTest()
+        assertTrue(items[0] is ChatListItem.AiMessageProcessSegment)
+        assertTrue(items[1] is ChatListItem.UserMessage)
+        assertTrue(items[2] is ChatListItem.AiMessageProcessSegment)
+        assertEquals(listOf(0, 1), items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().map { it.detailStartIndex })
+    }
+
+    private fun timelineTexts(items: List<ChatListItem>): List<String> = items.mapNotNull {
+        when (it) {
+            is ChatListItem.UserMessage -> it.text
+            is ChatListItem.AiMessageContentSegment -> it.text
+            else -> null
+        }
+    }
 
     @Before
     fun setUp() {
@@ -1151,6 +1241,42 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `正文后编写工具时显示临时进度且停止后移除`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val messageId = "writing-tool"
+        controller.stateHolder.messages.add(Message(
+            id = messageId,
+            text = "先检查环境。",
+            sender = Sender.AI,
+            contentStarted = true,
+            executionStatus = TOOL_CALL_WRITING_STATUS,
+            executionTrace = listOf(ExecutionTraceEvent.Content("先检查环境。")),
+        ))
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = messageId
+        Snapshot.sendApplyNotifications()
+
+        val writingItems = controller.chatListItemsForTest()
+        assertTrue(writingItems.first() is ChatListItem.AiMessageContentSegment)
+        val writing = writingItems.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single()
+        assertEquals(TOOL_CALL_WRITING_STATUS, writing.activityStatusText)
+        assertTrue(writing.processIsActive)
+        assertTrue(writing.events.isEmpty())
+        assertEquals(null, writing.executionStartedAtMillis)
+
+        controller.stateHolder._isTextApiCalling.value = false
+        controller.stateHolder._currentTextStreamingAiMessageId.value = null
+        Snapshot.sendApplyNotifications()
+        // StateFlow 会先返回上一帧，等待结束态 Footer 到达后再检查临时状态是否清除。
+        val stoppedItems = runBlocking {
+            withTimeout(5_000) {
+                controller.chatListItems.first { items -> items.any { it is ChatListItem.AiMessageFooter } }
+            }
+        }
+        assertTrue(stoppedItems.none { it is ChatListItem.AiMessageProcessSegment })
+    }
+
+    @Test
     fun `流式正文已经继续输出时前一个过程段停止计时`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val messageId = "ordered-output-streaming"
@@ -1216,8 +1342,9 @@ class MessageItemsControllerStatusTest {
         val processItems = controller.chatListItemsForTest()
             .filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
-        assertEquals(listOf(200L, 700L), processItems.map { it.executionStartedAtMillis })
-        assertEquals(listOf(500L, 900L), processItems.map { it.executionFinishedAtMillis })
+        // 首段正文前已有独立的首字等待耗时，随后才是两个真实执行过程段。
+        assertEquals(listOf(50L, 200L, 700L), processItems.map { it.executionStartedAtMillis })
+        assertEquals(listOf(100L, 500L, 900L), processItems.map { it.executionFinishedAtMillis })
     }
 
     private fun completedToolStep() = ExecutionStep(

@@ -6,6 +6,10 @@ import com.android.everytalk.data.DataClass.effectiveModelChannel
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
+import com.android.everytalk.data.DataClass.ModelCapabilitySource
+import com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS
+import com.android.everytalk.data.DataClass.DEFAULT_MAX_OUTPUT_TOKENS
+import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.statecontroller.ViewModelStateHolder
@@ -129,9 +133,9 @@ class ModelAndConfigController(
             return
         }
         // 在启动协程前保存目录快照，避免界面关闭弹窗时清空目录导致参数丢失。
-        val catalogSnapshot = modelNames.associateWith(modelFetchManager::capabilityFor)
+        val catalogSnapshot = modelNames.associateWith(modelFetchManager::capabilitiesFor)
         scope.launch {
-            // 模型目录经常只有模型名。添加前补拉详情，尽量把端点返回的能力参数直接写入配置。
+            // 复用获取阶段的全部参数；只有未经过获取流程的手动添加才补拉。
             val capabilitiesByModel = modelNames.associateWith { modelName ->
                 loadCapabilitiesForModel(
                     apiUrl = address,
@@ -139,7 +143,7 @@ class ModelAndConfigController(
                     channel = channel,
                     provider = provider,
                     modelName = modelName,
-                    cachedCandidate = catalogSnapshot[modelName],
+                    cachedCandidates = catalogSnapshot[modelName],
                 )
             }
             val successfulConfigs = mutableListOf<String>()
@@ -190,33 +194,33 @@ class ModelAndConfigController(
         if (trimmedModelName.isEmpty()) return
 
         val isImageGen = representativeConfig.modalityType == ModalityType.IMAGE
-        val catalogCandidate = modelFetchManager.capabilityFor(trimmedModelName)
+        val catalogCandidates = modelFetchManager.capabilitiesFor(trimmedModelName)
         val config = representativeConfig.copy(
             id = UUID.randomUUID().toString(),
             model = trimmedModelName,
             name = trimmedModelName,
             modelParameters = ModelParameters(),
         ).withModelCapabilityDefaults(
-            listOfNotNull(catalogCandidate)
+            catalogCandidates.orEmpty()
         )
         configManager.addConfig(config, isImageGen)
 
         // 手动追加没有可用目录参数时先保存兜底配置，再异步用端点详情覆盖能力字段。
-        if (needsCapabilityEnrichment(catalogCandidate)) {
+        if (catalogCandidates == null) {
             scope.launch {
-                val enriched = config.copy(
-                    modelParameters = ModelParameters(),
-                ).withModelCapabilityDefaults(
-                    loadCapabilitiesForModel(
-                        apiUrl = representativeConfig.address,
-                        apiKey = representativeConfig.key,
-                        channel = representativeConfig.effectiveModelChannel(),
-                        provider = representativeConfig.provider,
-                        modelName = trimmedModelName,
-                        cachedCandidate = catalogCandidate,
-                    )
+                val candidates = loadCapabilitiesForModel(
+                    apiUrl = representativeConfig.address,
+                    apiKey = representativeConfig.key,
+                    channel = config.effectiveModelChannel(),
+                    provider = representativeConfig.provider,
+                    modelName = trimmedModelName,
+                    cachedCandidates = catalogCandidates,
                 )
-                if (enriched != config) configManager.updateConfig(enriched, isImageGen)
+                // 网络返回后使用最新配置，避免覆盖期间的编辑，也不复活已删除的模型。
+                val currentConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
+                val current = currentConfigs.firstOrNull { it.id == config.id } ?: return@launch
+                val enriched = current.withModelCapabilityDefaults(candidates)
+                if (enriched != current) configManager.updateConfig(enriched, isImageGen)
             }
         }
     }
@@ -224,6 +228,11 @@ class ModelAndConfigController(
     fun refreshModelsForConfig(config: ApiConfig) {
         val refreshId = modelConfigGroupId(config)
         val isImageGen = config.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
+        val parameterChannels = (stateHolder._apiConfigs.value + stateHolder._imageGenApiConfigs.value)
+            .filter { modelConfigGroupId(it) == refreshId }
+            .map { it.effectiveModelChannel() }
+            .distinctBy(::modelParameterProtocol)
+            .filter { modelParameterProtocol(it) != modelParameterProtocol(config.channel) }
         stateHolder._pendingConfigParams.value = null
         stateHolder._showAutoFetchConfirmDialog.value = false
         launchLatestModelRequest(
@@ -231,6 +240,7 @@ class ModelAndConfigController(
             apiKey = config.key,
             channel = config.channel,
             refreshId = refreshId,
+            parameterChannels = parameterChannels,
             onSuccess = { models ->
                 if (models.isEmpty()) {
                     showSnackbar("未获取到任何模型")
@@ -263,6 +273,7 @@ class ModelAndConfigController(
         apiKey: String,
         channel: String?,
         refreshId: String? = null,
+        parameterChannels: List<String> = emptyList(),
         onSuccess: (List<String>) -> Unit,
         onFailure: (Exception) -> Unit,
     ) {
@@ -277,7 +288,21 @@ class ModelAndConfigController(
             requestJob = scope.launch(start = CoroutineStart.LAZY) {
                 val catalog = try {
                     withContext(Dispatchers.IO) {
-                        ApiClient.getModelCatalog(apiUrl, apiKey, channel)
+                        val catalog = ApiClient.getModelCatalog(apiUrl, apiKey, channel)
+                        val listedModels = catalog.mapTo(mutableSetOf()) { it.modelId.lowercase() }
+                        // 单模型可能覆盖平台协议。按协议各获取一次，参数仍匹配自身协议，
+                        // 额外目录只补能力，不改变平台列表和已下架判断。
+                        val overrides = parameterChannels.flatMap { parameterChannel ->
+                            try {
+                                ApiClient.getModelCatalog(apiUrl, apiKey, parameterChannel)
+                                    .filter { it.modelId.lowercase() in listedModels }
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                        catalog + overrides
                     }
                 } catch (e: CancellationException) {
                     synchronized(modelRequestLock) {
@@ -300,9 +325,10 @@ class ModelAndConfigController(
                 synchronized(modelRequestLock) {
                     if (modelRequestGeneration != generation) return@launch
                     modelFetchManager.setFetchedCatalog(catalog)
+                    if (refreshId != null) updateFetchedModelParameters(refreshId)
                     modelFetchManager.setRefreshingModel(null)
                     modelRequestJob = null
-                    onSuccess(catalog.map { it.modelId })
+                    onSuccess(modelFetchManager.fetchedModels.value)
                 }
             }
             modelRequestJob = requestJob
@@ -320,7 +346,7 @@ class ModelAndConfigController(
             return
         }
         // 在启动协程前保存目录快照，避免刷新弹窗关闭时清空目录导致参数丢失。
-        val catalogSnapshot = requestedModels.associateWith(modelFetchManager::capabilityFor)
+        val catalogSnapshot = requestedModels.associateWith(modelFetchManager::capabilitiesFor)
         scope.launch {
             val currentConfigs = if (params.isImageGen) {
                 stateHolder._imageGenApiConfigs.value
@@ -347,7 +373,7 @@ class ModelAndConfigController(
                 showSnackbar("没有可添加的新模型")
                 return@launch
             }
-            // 刷新得到的目录可能只有模型名。对真正要新增的模型补拉详情参数。
+            // 获取阶段已经补拉参数，新增时直接采用快照，关闭弹窗也不会丢失结果。
             val capabilitiesByModel = modelsToAdd.associateWith { modelName ->
                 loadCapabilitiesForModel(
                     apiUrl = params.address,
@@ -355,7 +381,7 @@ class ModelAndConfigController(
                     channel = params.channel,
                     provider = params.provider,
                     modelName = modelName,
-                    cachedCandidate = catalogSnapshot[modelName],
+                    cachedCandidates = catalogSnapshot[modelName],
                 )
             }
 
@@ -428,20 +454,71 @@ class ModelAndConfigController(
         showSnackbar("已删除 ${normalizedModels.size} 个已下架模型")
     }
 
-    /**
-     * 返回模型的端点能力候选。目录已有完整参数时不重复请求，目录不完整时调用详情接口补齐。
-     * 详情接口失败只影响能力增强，调用方仍会使用官方、家族和保守默认值。
-     */
+    /** 刷新立即更新已保存模型，不需要再打开参数弹窗或重新勾选旧模型。 */
+    private fun updateFetchedModelParameters(groupId: String) {
+        listOf(false, true).forEach { isImageGen ->
+            val configsFlow = if (isImageGen) stateHolder._imageGenApiConfigs else stateHolder._apiConfigs
+            val selectedFlow = if (isImageGen) stateHolder._selectedImageGenApiConfig else stateHolder._selectedApiConfig
+            val current = configsFlow.value
+            val updated = current.map { config ->
+                if (modelConfigGroupId(config) != groupId) return@map config
+                val protocol = modelParameterProtocol(config.effectiveModelChannel())
+                val candidates = modelFetchManager.capabilitiesFor(config.model)
+                    ?.filter { it.protocol == protocol }
+                    ?.takeIf { it.isNotEmpty() } ?: return@map config
+                val previous = config.modelParameters.resolvedCapability
+                // 网络暂时缺字段时保留上次结果，但不再把废弃内置表的值转换成本地缓存。
+                // 来源明确的手动值由公共解析器优先保留。
+                val cached = previous?.let {
+                    ModelCapabilityCandidate(
+                        modelId = config.model, protocol = protocol, endpointIdentity = it.endpointIdentity,
+                        contextWindowTokens = it.contextWindowTokens.takeIf { _ ->
+                            candidates.none { it.contextWindowTokens != null } &&
+                                it.contextWindowSource !in setOf(ModelCapabilitySource.CONSERVATIVE_DEFAULT, ModelCapabilitySource.FAMILY_FALLBACK, ModelCapabilitySource.OFFICIAL_CATALOG)
+                        },
+                        maxOutputTokens = it.maxOutputTokens.takeIf { _ ->
+                            candidates.none { it.maxOutputTokens != null } &&
+                                it.maxOutputSource !in setOf(ModelCapabilitySource.CONSERVATIVE_DEFAULT, ModelCapabilitySource.FAMILY_FALLBACK, ModelCapabilitySource.OFFICIAL_CATALOG)
+                        },
+                        maxInputTokens = it.maxInputTokens.takeIf { _ -> it.maxInputSource != ModelCapabilitySource.OFFICIAL_CATALOG && candidates.none { it.maxInputTokens != null } },
+                        family = it.family.takeIf { _ -> it.familySource != ModelCapabilitySource.OFFICIAL_CATALOG && candidates.none { it.family != null } },
+                        inputModalities = it.inputModalities.takeIf { _ -> it.modalitiesSource != ModelCapabilitySource.OFFICIAL_CATALOG && candidates.none { it.inputModalities.isNotEmpty() || it.outputModalities.isNotEmpty() } }.orEmpty(),
+                        outputModalities = it.outputModalities.takeIf { _ -> it.modalitiesSource != ModelCapabilitySource.OFFICIAL_CATALOG && candidates.none { it.inputModalities.isNotEmpty() || it.outputModalities.isNotEmpty() } }.orEmpty(),
+                        supportsReasoning = it.supportsReasoning.takeIf { _ -> it.reasoningSource != ModelCapabilitySource.OFFICIAL_CATALOG && candidates.none { it.supportsReasoning != null || it.reasoningEfforts.isNotEmpty() } },
+                        reasoningEfforts = it.reasoningEfforts.takeIf { _ -> it.reasoningSource != ModelCapabilitySource.OFFICIAL_CATALOG && candidates.none { it.supportsReasoning != null || it.reasoningEfforts.isNotEmpty() } }.orEmpty(),
+                        source = ModelCapabilitySource.LOCAL_CACHE,
+                    )
+                }
+                // 旧版本没有记录参数来源，只保护其中偏离默认值的限制，避免刷新抹掉手动设置。
+                val legacyOverride = if (previous == null) ModelCapabilityCandidate(
+                    modelId = config.model, protocol = protocol,
+                    contextWindowTokens = config.modelParameters.maxContextTokens.takeIf { it != DEFAULT_MAX_CONTEXT_TOKENS },
+                    maxOutputTokens = config.maxTokens?.takeIf { it != DEFAULT_MAX_OUTPUT_TOKENS },
+                    source = ModelCapabilitySource.USER_OVERRIDE,
+                ) else null
+                config.withModelCapabilityDefaults(candidates + listOfNotNull(cached, legacyOverride))
+            }
+            if (updated != current) {
+                configsFlow.value = updated
+                selectedFlow.value?.id?.let { id ->
+                    updated.firstOrNull { it.id == id }?.let { selectedFlow.value = it }
+                }
+                // 一组只保存一次，并在执行时读取最新列表，避免排队保存过时快照。
+                scope.launch { persistenceManager.saveApiConfigs(configsFlow.value, isImageGen) }
+            }
+        }
+    }
+
+    /** 获取过的模型直接复用所有来源；手动输入的新模型才调用单模型获取接口。 */
     private suspend fun loadCapabilitiesForModel(
         apiUrl: String,
         apiKey: String,
         channel: String?,
         provider: String,
         modelName: String,
-        cachedCandidate: ModelCapabilityCandidate? = modelFetchManager.capabilityFor(modelName),
+        cachedCandidates: List<ModelCapabilityCandidate>? = modelFetchManager.capabilitiesFor(modelName),
     ): List<ModelCapabilityCandidate> {
-        val cached = cachedCandidate
-        if (!needsCapabilityEnrichment(cached)) return listOfNotNull(cached)
+        if (cachedCandidates != null) return cachedCandidates
 
         val live = try {
             ApiClient.getModelCapabilities(
@@ -456,15 +533,6 @@ class ModelAndConfigController(
         } catch (_: Exception) {
             emptyList()
         }
-        return buildList {
-            cached?.let(::add)
-            addAll(live)
-        }
-    }
-
-    /** 核心 token 限制缺失时需要再请求详情，其他能力字段由解析器和兜底目录补全。 */
-    private fun needsCapabilityEnrichment(candidate: ModelCapabilityCandidate?): Boolean {
-        if (candidate == null) return true
-        return candidate.contextWindowTokens == null || candidate.maxOutputTokens == null
+        return live
     }
 }

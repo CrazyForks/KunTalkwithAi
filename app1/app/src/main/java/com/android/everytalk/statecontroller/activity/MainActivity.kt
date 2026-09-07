@@ -28,12 +28,17 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.android.everytalk.ui.screens.settings.SettingsImportExportHost
+import com.android.everytalk.ui.screens.settings.isSettingsMenuTransition
+import com.android.everytalk.ui.screens.settings.settingsMenuEnterTransition
+import com.android.everytalk.ui.screens.settings.settingsMenuExitTransition
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import com.android.everytalk.util.locale.localizeUiMessage
+import com.android.everytalk.util.AppToast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -171,8 +176,10 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (mainContentStarted) {
-                    val snackbarHostState = remember { SnackbarHostState() }
                     val navController = rememberNavController()
+                    // 导入导出是覆盖当前页面的操作，不改变导航栈或当前设置页签。
+                    var showImportExportDialog by rememberSaveable { mutableStateOf(false) }
+                    val openImportExport: () -> Unit = { showImportExportDialog = true }
                     val coroutineScope = rememberCoroutineScope()
 
                     appViewModel = viewModel(
@@ -184,15 +191,9 @@ class MainActivity : AppCompatActivity() {
                     val expandedDrawerItemIndex by appViewModel.expandedDrawerItemIndex.collectAsState()
                     val isLoadingHistoryData by appViewModel.isLoadingHistoryData.collectAsState()
 
-                    LaunchedEffect(appViewModel.snackbarMessage, snackbarHostState) {
+                    LaunchedEffect(appViewModel.snackbarMessage) {
                         appViewModel.snackbarMessage.collectLatest { message ->
-                            val localizedMessage = this@MainActivity.localizeUiMessage(message)
-                            if (
-                                localizedMessage.isNotBlank() &&
-                                snackbarHostState.currentSnackbarData?.visuals?.message != localizedMessage
-                            ) {
-                                snackbarHostState.showSnackbar(localizedMessage)
-                            }
+                            AppToast.show(this@MainActivity, message)
                         }
                     }
 
@@ -207,16 +208,6 @@ class MainActivity : AppCompatActivity() {
                         modifier = Modifier.fillMaxSize(),
                         containerColor = MaterialTheme.colorScheme.background,
                         contentWindowInsets = WindowInsets(0, 0, 0, 0), // 允许内容延伸到系统栏区域
-                        snackbarHost = {
-                            SnackbarHost(
-                                hostState = snackbarHostState,
-                                modifier = Modifier
-                                    .padding(bottom = 16.dp)
-                                    .windowInsetsPadding(WindowInsets.navigationBars) // 确保Snackbar在导航栏上方
-                            ) { snackbarData ->
-                                Snackbar(snackbarData = snackbarData)
-                            }
-                        }
                     ) { contentPadding ->
                         val density = LocalDensity.current
                         val screenWidthDp = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
@@ -524,66 +515,100 @@ class MainActivity : AppCompatActivity() {
                                 composable(
                                     route = Screen.SETTINGS_SCREEN,
                                     enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuEnterTransition()
+                                        } else {
+                                            androidx.compose.animation.slideInHorizontally(
+                                                initialOffsetX = { fullWidth -> fullWidth },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                            )
+                                        }
                                     },
                                     exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuExitTransition()
+                                        } else {
+                                            androidx.compose.animation.slideOutHorizontally(
+                                                targetOffsetX = { fullWidth -> fullWidth },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                            )
+                                        }
                                     },
                                     popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuEnterTransition()
+                                        } else {
+                                            androidx.compose.animation.slideInHorizontally(
+                                                initialOffsetX = { fullWidth -> fullWidth },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                            )
+                                        }
                                     },
                                     popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuExitTransition()
+                                        } else {
+                                            androidx.compose.animation.slideOutHorizontally(
+                                                targetOffsetX = { fullWidth -> fullWidth },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                            )
+                                        }
                                     }
                                  ) {
                                      SettingsScreen(
                                          viewModel = appViewModel,
-                                         navController = navController
+                                         navController = navController,
+                                         onImportExport = openImportExport,
                                      )
                                  }
                                 composable(
                                     route = Screen.COMPUTER_SCREEN,
                                     enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuEnterTransition()
+                                        } else {
+                                            androidx.compose.animation.slideInHorizontally(
+                                                initialOffsetX = { fullWidth -> fullWidth },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                            )
+                                        }
                                     },
                                     exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuExitTransition()
+                                        } else {
+                                            androidx.compose.animation.slideOutHorizontally(
+                                                targetOffsetX = { fullWidth -> -fullWidth / 4 },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                            )
+                                        }
                                     },
                                     popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuEnterTransition()
+                                        } else {
+                                            androidx.compose.animation.slideInHorizontally(
+                                                initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                            )
+                                        }
                                     },
                                     popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuExitTransition()
+                                        } else {
+                                            androidx.compose.animation.slideOutHorizontally(
+                                                targetOffsetX = { fullWidth -> fullWidth },
+                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                            )
+                                        }
                                     },
                                 ) {
                                     com.android.everytalk.ui.screens.computer.ComputerNeutralTheme {
                                         com.android.everytalk.ui.screens.computer.ComputerScreen(
                                             viewModel = appViewModel,
                                             navController = navController,
+                                            onImportExport = openImportExport,
                                         )
                                     }
                                 }
@@ -628,8 +653,33 @@ class MainActivity : AppCompatActivity() {
                                         )
                                     }
                                 }
-                                composable(route = Screen.SKILL_SCREEN) {
-                                    com.android.everytalk.ui.screens.skill.SkillScreen(navController = navController)
+                                composable(
+                                    route = Screen.SKILL_SCREEN,
+                                    enterTransition = {
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuEnterTransition()
+                                        } else null
+                                    },
+                                    exitTransition = {
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuExitTransition()
+                                        } else null
+                                    },
+                                    popEnterTransition = {
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuEnterTransition()
+                                        } else null
+                                    },
+                                    popExitTransition = {
+                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
+                                            settingsMenuExitTransition()
+                                        } else null
+                                    },
+                                ) {
+                                    com.android.everytalk.ui.screens.skill.SkillScreen(
+                                        navController = navController,
+                                        onImportExport = openImportExport,
+                                    )
                                 }
                                 composable(route = Screen.SKILL_DOWNLOAD_SCREEN) {
                                     com.android.everytalk.ui.screens.skill.SkillDownloadScreen(navController = navController)
@@ -830,6 +880,11 @@ class MainActivity : AppCompatActivity() {
                                    )
                                }
                             }
+                            SettingsImportExportHost(
+                                viewModel = appViewModel,
+                                visible = showImportExportDialog,
+                                onDismissRequest = { showImportExportDialog = false },
+                            )
                             com.android.everytalk.ui.screens.computer.ComputerNeutralTheme {
                                 com.android.everytalk.ui.screens.computer.ComputerPublicPreviewConfirmationDialog(
                                     viewModel = appViewModel,

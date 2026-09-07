@@ -7,6 +7,9 @@ import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.effectiveModelChannel
+import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
+import com.android.everytalk.data.DataClass.withUserTokenLimits
+import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.statecontroller.PendingConfigParams
 import com.android.everytalk.statecontroller.ViewModelStateHolder
@@ -24,6 +27,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -213,7 +217,7 @@ class ModelAndConfigControllerTest {
     }
 
     @Test
-    fun `目录只有模型名时添加配置会自动补拉模型参数`() = runTest(UnconfinedTestDispatcher()) {
+    fun `未经目录获取的手动添加会自动补拉模型参数`() = runTest(UnconfinedTestDispatcher()) {
         mockkObject(ApiClient)
         val detail = ModelCapabilityCandidate(
             modelId = "model-a",
@@ -234,15 +238,7 @@ class ModelAndConfigControllerTest {
         } returns listOf(detail)
 
         val modelFetchManager = ModelFetchManager().apply {
-            setFetchedCatalog(
-                listOf(
-                    ModelCapabilityCandidate(
-                        modelId = "model-a",
-                        protocol = ModelParameterProtocol.GEMINI,
-                        source = ModelCapabilitySource.LIVE_ENDPOINT,
-                    )
-                )
-            )
+            setFetchedModels(listOf("model-a"))
         }
         val configManager = mockk<ConfigManager>(relaxed = true)
         val controller = controller(
@@ -445,6 +441,162 @@ class ModelAndConfigControllerTest {
             stateHolder.conversationApiConfigIds.value,
         )
         coVerify(exactly = 0) { persistenceManager.saveConversationApiConfigIds(any()) }
+    }
+
+    @Test
+    fun `获取完成后新增直接保存各来源参数且清空弹窗不触发重复获取`() = runTest {
+        mockkObject(ApiClient)
+        val live = ModelCapabilityCandidate(
+            modelId = "model-a", protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+            contextWindowTokens = 256_000, source = ModelCapabilitySource.LIVE_ENDPOINT,
+        )
+        val community = live.copy(
+            contextWindowTokens = 128_000, maxOutputTokens = 16_000,
+            supportsReasoning = true, reasoningEfforts = setOf("high"),
+            source = ModelCapabilitySource.COMMUNITY_CATALOG,
+        )
+        coEvery { ApiClient.getModelCatalog(any(), any(), any()) } returns listOf(live, community)
+        val manager = ModelFetchManager()
+        val configManager = mockk<ConfigManager>(relaxed = true)
+        val controller = controller(this, ViewModelStateHolder(), manager, configManager = configManager)
+        val result = CompletableDeferred<Result<List<String>>>()
+        controller.fetchModels("https://example.com", "key", "OpenAI兼容") { result.complete(it) }
+        assertEquals(listOf("model-a"), result.await().getOrThrow())
+        assertEquals(listOf(live, community), manager.capabilitiesFor("model-a"))
+
+        controller.createMultipleConfigs("自定义", "https://example.com", "key", listOf("model-a"))
+        controller.clearFetchedModels()
+        advanceUntilIdle()
+
+        val saved = slot<ApiConfig>()
+        verify(exactly = 1) { configManager.addConfig(capture(saved), false) }
+        assertEquals(256_000, saved.captured.modelParameters.maxContextTokens)
+        assertEquals(16_000, saved.captured.maxTokens)
+        assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, saved.captured.modelParameters.resolvedCapability?.maxOutputSource)
+        assertEquals(setOf("high"), saved.captured.modelParameters.resolvedCapability?.reasoningEfforts)
+        coVerify(exactly = 0) { ApiClient.getModelCapabilities(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `刷新立即持久化旧模型参数并保留手动值和其他组`() = runTest {
+        mockkObject(ApiClient)
+        for (isImageGen in listOf(false, true)) {
+            val capability = ModelCapabilityCandidate(
+                modelId = "model-a", protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                contextWindowTokens = 256_000, maxOutputTokens = 32_000,
+                supportsReasoning = true, source = ModelCapabilitySource.COMMUNITY_CATALOG,
+            )
+            val old = imageConfig("id-a", "model-a", "我的模型").copy(
+                modalityType = if (isImageGen) ModalityType.IMAGE else ModalityType.TEXT,
+            ).withModelCapabilityDefaults(listOf(capability.copy(contextWindowTokens = 128_000, maxOutputTokens = 8_000)))
+            val manual = old.copy(id = "manual", model = "manual").withUserTokenLimits(ModelTokenLimits(4_000, 64_000))
+            val legacy = old.copy(id = "legacy", model = "legacy", maxTokens = 2_000, modelParameters = ModelParameters())
+            val unrelated = old.copy(id = "other", address = "https://other.example")
+            val state = ViewModelStateHolder()
+            val configs = if (isImageGen) state._imageGenApiConfigs else state._apiConfigs
+            val selected = if (isImageGen) state._selectedImageGenApiConfig else state._selectedApiConfig
+            configs.value = listOf(old, manual, legacy, unrelated)
+            selected.value = old
+            coEvery { ApiClient.getModelCatalog(old.address, old.key, old.channel) } returns
+                listOf(capability, capability.copy(modelId = "manual"), capability.copy(modelId = "legacy"))
+            val persistence = mockk<DataPersistenceManager>(relaxed = true)
+            val controller = controller(this, state, persistenceManager = persistence)
+
+            controller.refreshModelsForConfig(old)
+            state._showModelSelectionDialog.first { it }
+            advanceUntilIdle()
+
+            val updated = configs.value.first()
+            assertEquals(256_000, updated.modelParameters.maxContextTokens)
+            assertEquals(32_000, updated.maxTokens)
+            assertEquals(old.name, updated.name)
+            assertEquals(old.temperature, updated.temperature)
+            assertEquals(updated, selected.value)
+            assertEquals(4_000, configs.value[1].maxTokens)
+            assertEquals(64_000, configs.value[1].modelParameters.maxContextTokens)
+            assertEquals(2_000, configs.value[2].maxTokens)
+            assertEquals(256_000, configs.value[2].modelParameters.maxContextTokens)
+            assertEquals(unrelated, configs.value.last())
+            coVerify(exactly = 1) { persistence.saveApiConfigs(configs.value, isImageGen) }
+        }
+    }
+
+    @Test
+    fun `刷新清除旧内置规格且pi缺失时不会把旧值当缓存`() = runTest {
+        mockkObject(ApiClient)
+        for (source in listOf(ModelCapabilitySource.PI_CATALOG, ModelCapabilitySource.COMMUNITY_CATALOG, null)) {
+            val old = imageConfig("id-gpt", "gpt-5.6-sol", "GPT").copy(
+                maxTokens = 128_000,
+                modelParameters = ModelParameters(
+                    maxContextTokens = 1_050_000,
+                    resolvedCapability = com.android.everytalk.data.DataClass.ResolvedModelCapability(
+                        modelId = "gpt-5.6-sol", endpointIdentity = "https://image.example",
+                        contextWindowTokens = 1_050_000, maxInputTokens = 922_000, maxOutputTokens = 128_000,
+                        contextWindowSource = ModelCapabilitySource.OFFICIAL_CATALOG,
+                        maxInputSource = ModelCapabilitySource.OFFICIAL_CATALOG,
+                        maxOutputSource = ModelCapabilitySource.OFFICIAL_CATALOG,
+                        inputModalities = setOf("text", "image"), outputModalities = setOf("text"),
+                        modalitiesSource = ModelCapabilitySource.OFFICIAL_CATALOG,
+                        supportsReasoning = true, reasoningEfforts = setOf("max"),
+                        reasoningSource = ModelCapabilitySource.OFFICIAL_CATALOG,
+                    ),
+                ),
+            )
+            val state = ViewModelStateHolder().apply {
+                _imageGenApiConfigs.value = listOf(old)
+                _selectedImageGenApiConfig.value = old
+            }
+            coEvery { ApiClient.getModelCatalog(old.address, old.key, old.channel) } returns listOf(
+                ModelCapabilityCandidate(modelId = old.model, protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                    contextWindowTokens = 272_000.takeIf { source != null },
+                    maxOutputTokens = 128_000.takeIf { source != null },
+                    source = source ?: ModelCapabilitySource.LIVE_ENDPOINT),
+            )
+            val persistence = mockk<DataPersistenceManager>(relaxed = true)
+            controller(this, state, persistenceManager = persistence).refreshModelsForConfig(old)
+            state._showModelSelectionDialog.first { it }
+            advanceUntilIdle()
+            val updated = state._imageGenApiConfigs.value.single()
+            assertEquals(if (source == null) 128_000 else 272_000, updated.modelParameters.maxContextTokens)
+            assertEquals(source ?: ModelCapabilitySource.FAMILY_FALLBACK, updated.modelParameters.resolvedCapability?.contextWindowSource)
+            assertEquals(null, updated.modelParameters.resolvedCapability?.maxInputTokens)
+            assertEquals(updated, state._selectedImageGenApiConfig.value)
+            coVerify(exactly = 1) { persistence.saveApiConfigs(listOf(updated), true) }
+        }
+    }
+
+    @Test
+    fun `刷新按单模型协议补齐参数且额外目录不改变平台模型列表`() = runTest {
+        mockkObject(ApiClient)
+        val base = imageConfig("id-a", "model-a", "model-a")
+        val codex = base.copy(
+            id = "id-b", model = "model-b",
+            modelParameters = ModelParameters(apiProtocolOverride = ModelParameterProtocol.CODEX),
+        )
+        val candidate = ModelCapabilityCandidate(
+            modelId = "model-a", protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+            contextWindowTokens = 128_000, maxOutputTokens = 8_000,
+            source = ModelCapabilitySource.LIVE_ENDPOINT,
+        )
+        coEvery { ApiClient.getModelCatalog(base.address, base.key, base.channel) } returns
+            listOf(candidate, candidate.copy(modelId = "model-b"))
+        coEvery { ApiClient.getModelCatalog(base.address, base.key, "Codex") } returns listOf(
+            candidate.copy(modelId = "model-b", protocol = ModelParameterProtocol.CODEX, maxOutputTokens = 32_000),
+            candidate.copy(modelId = "extra", protocol = ModelParameterProtocol.CODEX),
+        )
+        val state = ViewModelStateHolder().apply { _imageGenApiConfigs.value = listOf(base, codex) }
+        val manager = ModelFetchManager()
+        val controller = controller(this, state, manager)
+
+        controller.refreshModelsForConfig(base)
+        state._showModelSelectionDialog.first { it }
+        advanceUntilIdle()
+
+        assertEquals(8_000, state._imageGenApiConfigs.value[0].maxTokens)
+        assertEquals(32_000, state._imageGenApiConfigs.value[1].maxTokens)
+        assertEquals(ModelParameterProtocol.CODEX, state._imageGenApiConfigs.value[1].modelParameters.apiProtocolOverride)
+        assertEquals(listOf("model-a", "model-b"), manager.fetchedModels.value)
+        coVerify(exactly = 1) { ApiClient.getModelCatalog(base.address, base.key, "Codex") }
     }
 
     @Test

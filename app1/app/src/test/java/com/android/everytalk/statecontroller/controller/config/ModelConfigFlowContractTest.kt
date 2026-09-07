@@ -53,6 +53,17 @@ class ModelConfigFlowContractTest {
         assertTrue(settingsContent.contains("modelConfigGroupId(configsForKeyAndModality.first())"))
     }
 
+    @Test
+    fun `settings model popup renders the complete sorted list in a lazy scroll container`() {
+        val settingsContent = sourceFile("ui/screens/settings/SettingsScreenContent.kt")
+        val popup = settingsContent.substringAfter("private fun ModelListPopup(")
+
+        assertTrue(popup.contains("sortModelConfigs(configs)"))
+        assertTrue(popup.contains("LazyColumn("))
+        assertTrue(popup.contains("items = sortedConfigs"))
+        assertFalse(popup.contains("centeredModelWindow"))
+    }
+
     private fun sourceFile(relativePath: String): String {
         return sequenceOf(
             File("src/main/java/com/android/everytalk/$relativePath"),
