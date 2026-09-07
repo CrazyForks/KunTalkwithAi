@@ -204,10 +204,9 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         state_ticks="$(state_value "$state_file" start_ticks)"
         valid_decimal "$state_pid" && valid_decimal "$state_ticks" || return 1
         [ "$state_pid" -gt 1 ] || return 1
-        [ -r "/proc/$state_pid/stat" ] || return 1
-        actual_ticks="$(awk '{print $22}' "/proc/$state_pid/stat" 2>/dev/null || true)"
-        actual_group="$(awk '{print $5}' "/proc/$state_pid/stat" 2>/dev/null || true)"
-        [ "$actual_ticks" = "$state_ticks" ] && [ "$actual_group" = "$state_pid" ] && process_owner_allowed
+        read_process_identity "$state_pid" &&
+            [ "$cancel_process_ticks" = "$state_ticks" ] &&
+            [ "$cancel_process_group" = "$state_pid" ] && process_owner_allowed
     }
 
     state_has_expected_identity() {
@@ -217,6 +216,10 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
     }
 
     write_v2_state() {
+        # 登记取消后只有持有 cancel.lock 的取消端发布终态；执行端不再覆盖状态。
+        case "$input_mode" in --managed-v2|--host-managed-v2)
+            [ ! -e "$execution_dir/cancel.members" ] || return 0 ;;
+        esac
         state_status="$1"
         state_exit="${2:-}"
         state_pid="${3:-${state_pid:-}}"
@@ -259,7 +262,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             state_owner_allowed "$state_file" || reject_untrusted_state '状态文件所有者校验失败'
             state_has_expected_identity || reject_untrusted_state '状态身份校验失败'
             current_status="$(state_value "$state_file" status)"
-            if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ]; then
+            if ! cancel_pending && { [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ]; }; then
                 if ! state_has_valid_process; then
                     # boot_id 改变表示 VPS 重启；boot_id 相同表示进程被外部终止。
                     request_hash="$(state_value "$state_file" request_hash)"
@@ -275,7 +278,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             fi
             # 兼容仍在运行的旧 Wrapper：它可能提前写 CANCELLED，但取消端尚未确认子进程退出。
             # 对外仅发布 UNKNOWN，直到本次 cancel 的完整收尾标记落盘。
-            if [ -e "$execution_dir/cancel.members" ] && ! cancel_is_complete; then
+            if cancel_pending; then
                 awk -F= '$1 == "status" { print "status=UNKNOWN"; next }
                     $1 == "exit_code" { print "exit_code="; next } { print }' "$state_file"
             else
@@ -296,10 +299,28 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             [ "$(cat "$execution_dir/cancel.complete")" = "$request_hash" ]
     }
 
+    # 查询只投影取消状态，不参与取消状态落盘；失败也不能覆盖恰好完成的正常结果。
+    cancel_pending() {
+        [ "${cancel_unconfirmed:-false}" = true ] ||
+            { [ -e "$execution_dir/cancel.members" ] && ! cancel_is_complete; }
+    }
+    observed_v2_status() {
+        if cancel_pending; then printf UNKNOWN; else state_value "$state_file" status; fi
+    }
+    cancel_clock() {
+        # /proc/uptime 是单调时间，不受系统校时影响；读取与计算均用 Shell 内建命令。
+        IFS=' ' read -r cancel_uptime cancel_idle < /proc/uptime || return 1
+        cancel_fraction="${cancel_uptime#*.}"
+        cancel_now="$((${cancel_uptime%%.*} * 100 + 1$cancel_fraction - 100))"
+    }
+    cancel_within_deadline() {
+        cancel_clock && [ "$cancel_now" -lt "$cancel_deadline" ]
+    }
+
     # 只枚举这次 setsid 启动的会话，不跨到其他 Execution、systemd 服务或自行脱离的守护进程。
     # timeout 可以创建新的进程组，但仍属于同一会话，因此不能只 kill 原进程组。
     # 每个成员记录 PID + start_ticks，发信号前再次验证，拒绝接管复用的 PID。
-    read_cancel_process() {
+    read_process_identity() {
         cancel_process_pid="$1"
         cancel_process_line=''
         IFS= read -r cancel_process_line 2>/dev/null < "/proc/$cancel_process_pid/stat" || return 1
@@ -307,6 +328,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         set -- $cancel_process_rest
         [ "$#" -ge 20 ] || return 1
         cancel_process_state="$1"
+        cancel_process_group="$3"
         cancel_process_session="$4"
         shift 19
         cancel_process_ticks="$1"
@@ -316,16 +338,17 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
     cancel_member_matches() {
         valid_decimal "$1" && [ "$1" -gt 1 ] && valid_decimal "$2" || return 1
         cancel_expected_ticks="$2"
-        read_cancel_process "$1" &&
+        read_process_identity "$1" &&
             [ "$cancel_process_session" = "$cancel_session" ] &&
             [ "$cancel_process_ticks" = "$cancel_expected_ticks" ] &&
             path_owner_allowed "/proc/$cancel_process_pid"
     }
     collect_cancel_members() {
         for cancel_stat in /proc/[0-9]*/stat; do
+            cancel_within_deadline || return 1
             cancel_pid="${cancel_stat%/stat}"
             cancel_pid="${cancel_pid##*/}"
-            read_cancel_process "$cancel_pid" || continue
+            read_process_identity "$cancel_pid" || continue
             [ "$cancel_process_session" = "$cancel_session" ] || continue
             [ "$cancel_process_ticks" -ge "$cancel_start_ticks" ] || return 1
             path_owner_allowed "/proc/$cancel_pid" || return 1
@@ -334,6 +357,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
     }
     cancel_has_anchor() {
         while read -r cancel_pid cancel_ticks; do
+            cancel_within_deadline || return 1
             cancel_member_matches "$cancel_pid" "$cancel_ticks" && return 0
         done < "$execution_dir/cancel.members"
         return 1
@@ -344,13 +368,64 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         mv -f -- "$cancel_members_tmp" "$execution_dir/cancel.members"
     }
     signal_cancel_members() {
-        cancel_signal="$1"
-        while read -r cancel_pid cancel_ticks; do
-            # 不使用负 PID 的组杀，也不以进程名匹配；进程在验证期间消失属于正常退出。
-            if cancel_member_matches "$cancel_pid" "$cancel_ticks"; then
-                kill "-$cancel_signal" "$cancel_pid" 2>/dev/null || true
-            fi
-        done < "$execution_dir/cancel.members"
+        # 一批成员只启动一次 Python。代码随 Wrapper 的摘要版本一起部署，无额外安装文件。
+        # 必须先打开绑定原进程的 pidfd，再验证身份，最后通过句柄发信号。
+        # 不支持 pidfd / 权限不足时返回失败，由上层报告 UNKNOWN；绝不退回数字 PID kill。
+        python3 -I - "$execution_dir/cancel.members" "$cancel_session" "$1" "$cancel_deadline" \
+            "${EVERYTALK_ALLOWED_OWNER_UIDS:-$(id -u)}" <<'EVERYTALK_PIDFD'
+import os
+import select
+import signal
+import sys
+import time
+
+
+def signal_members(members_path, session, signal_name, deadline, owners):
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise RuntimeError("系统缺少 pidfd 支持，未降级为 PID kill")
+    with open(members_path, encoding="ascii") as members:
+        for line in members:
+            if time.monotonic() * 100 >= deadline:
+                raise RuntimeError("取消超过时间预算")
+            pid, ticks = map(int, line.split())
+            if pid <= 1 or ticks < 0:
+                raise RuntimeError("取消成员身份无效")
+            try:
+                fd = os.pidfd_open(pid, 0)
+            except ProcessLookupError:
+                continue
+            try:
+                # /proc 使用数字路径；读取期间原进程可能退出并被复用。
+                # 读取后再次检查 pidfd 是否已退出，拒绝拿新进程身份验证旧句柄。
+                try:
+                    with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as stat:
+                        fields = stat.read().rsplit(") ", 1)[1].split()
+                    owner = os.stat(f"/proc/{pid}").st_uid
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                if (fields[0] in ("Z", "X") or int(fields[3]) != session
+                        or int(fields[19]) != ticks or owner not in owners):
+                    continue
+                poller = select.poll()
+                poller.register(fd, select.POLLIN)
+                if poller.poll(0):
+                    continue
+                # 即使此处原进程恰好退出，句柄也只能命中它，不会命中复用 PID 的服务。
+                try:
+                    signal.pidfd_send_signal(fd, getattr(signal, "SIG" + signal_name))
+                except ProcessLookupError:
+                    pass
+            finally:
+                os.close(fd)
+
+
+try:
+    signal_members(sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4]),
+                   {int(owner) for owner in sys.argv[5].split()})
+except (OSError, RuntimeError, ValueError, IndexError, AttributeError) as error:
+    print(f"停止未确认: {error}", file=sys.stderr)
+    sys.exit(1)
+EVERYTALK_PIDFD
     }
     cleanup_cancelled_execution() {
         # SIGKILL 无法执行 trap。新任务将 runtime ID 单独留在其 Execution 目录，
@@ -398,6 +473,9 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         # 锁忙时不覆盖另一个取消请求正在发布的状态，交给 Android 稍后重试。
         flock -n 9 || exit 75
         cancel_is_complete && return 0
+        cancel_clock || return 1
+        cancel_kill_at="$((cancel_now + 500))"
+        cancel_deadline="$((cancel_now + 800))"
         cancel_session="$(state_value "$state_file" pid)"
         cancel_start_ticks="$(state_value "$state_file" start_ticks)"
         valid_decimal "$cancel_session" && [ "$cancel_session" -gt 1 ] &&
@@ -415,29 +493,30 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         fi
         # 不相信 wrapper 提前写出的 CANCELLED；必须看到受管会话真的没有活进程。
         # 重新扫描前要求至少一个已知成员仍在，防止会话号复用后扩大杀伤范围。
-        cancel_attempt=0
-        while [ "$cancel_attempt" -lt 70 ]; do
+        signal_cancel_members TERM || return 1
+        cancel_next_scan="$cancel_kill_at"
+        while cancel_within_deadline; do
             cancel_anchored=false
             cancel_has_anchor && cancel_anchored=true
-            cancel_members="$(collect_cancel_members)" || return 1
-            if [ -z "$cancel_members" ]; then
-                cleanup_cancelled_execution || return 1
-                write_v2_state CANCELLED 137 "$cancel_session" "$cancel_start_ticks" \
-                    "$(state_value "$state_file" started_at)"
-                cancel_complete_tmp="$(mktemp "$execution_dir/cancel-complete.XXXXXX")" || return 1
-                printf '%s\n' "$request_hash" > "$cancel_complete_tmp"
-                mv -f -- "$cancel_complete_tmp" "$execution_dir/cancel.complete"
-                return 0
-            fi
-            [ "$cancel_anchored" = true ] || return 1
-            save_cancel_members || return 1
-            if [ "$cancel_attempt" -eq 0 ]; then
-                signal_cancel_members TERM
-            elif [ "$cancel_attempt" -ge 50 ]; then
-                signal_cancel_members KILL
+            # 等待时只探测已登记成员；到 KILL 阶段每秒补扫一次，或在确认退出前最后扫描。
+            # 不再每 100ms 扫描整台 VPS。扫描和发信号内部也检查同一截止时间。
+            if [ "$cancel_anchored" = false ] || [ "$cancel_now" -ge "$cancel_next_scan" ]; then
+                cancel_members="$(collect_cancel_members)" || return 1
+                if [ -z "$cancel_members" ]; then
+                    cleanup_cancelled_execution || return 1
+                    write_v2_state CANCELLED 137 "$cancel_session" "$cancel_start_ticks" \
+                        "$(state_value "$state_file" started_at)"
+                    cancel_complete_tmp="$(mktemp "$execution_dir/cancel-complete.XXXXXX")" || return 1
+                    printf '%s\n' "$request_hash" > "$cancel_complete_tmp"
+                    mv -f -- "$cancel_complete_tmp" "$execution_dir/cancel.complete"
+                    return 0
+                fi
+                [ "$cancel_anchored" = true ] || return 1
+                save_cancel_members || return 1
+                signal_cancel_members KILL || return 1
+                cancel_next_scan="$((cancel_now + 100))"
             fi
             sleep 0.1
-            cancel_attempt="$((cancel_attempt + 1))"
         done
         return 1
     }
@@ -490,23 +569,13 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             [ "$max_bytes" -ge 1 ] && [ "$max_bytes" -le 262144 ] || { printf '%s\n' '日志读取长度无效' >&2; exit 48; }
         fi
         if [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --execution-cancel ]; then
-          if [ -f "$state_file" ] && [ ! -L "$state_file" ] && \
-             execution_parent_safe && execution_directory_safe && state_owner_allowed "$state_file"; then
+          # 路径、状态身份和请求哈希已经在本分支入口统一校验，无需在这里重复一遍。
+          if [ -f "$state_file" ]; then
             current_status="$(state_value "$state_file" status)"
             if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ] || \
                [ -e "$execution_dir/cancel.members" ]; then
-                state_hash="$(state_value "$state_file" request_hash)"
-                if [ -n "$expected_request_hash" ] && [ "$state_hash" != "$expected_request_hash" ]; then
-                    printf '%s\n' 'Execution request hash 冲突' >&2
-                    exit 49
-                fi
-                request_hash="$state_hash"
-                state_started="$(state_value "$state_file" started_at)"
                 if ! cancel_managed_execution; then
-                    request_hash="$(state_value "$state_file" request_hash)"
-                    state_started="$(state_value "$state_file" started_at)"
-                    write_v2_state UNKNOWN '' "$(state_value "$state_file" pid)" \
-                        "$(state_value "$state_file" start_ticks)" "$state_started"
+                    cancel_unconfirmed=true
                 fi
             fi
           fi
@@ -519,7 +588,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             stdout_total=0
             stderr_total=0
             while [ "$watch_attempt" -lt 84 ]; do
-                st_val="$(state_value "$state_file" status 2>/dev/null || printf 'UNKNOWN')"
+                st_val="$(observed_v2_status 2>/dev/null || printf 'UNKNOWN')"
                 if [ -f "$stdout_log" ] && [ ! -L "$stdout_log" ] && state_owner_allowed "$stdout_log"; then
                     stdout_total="$(wc -c < "$stdout_log" | tr -d ' ')"
                 fi
@@ -551,7 +620,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             curr_stdout_cursor="$((stdout_cursor + stdout_count))"
             curr_stderr_cursor="$((stderr_cursor + stderr_count))"
             print_v2_state
-            st_val="$(state_value "$state_file" status 2>/dev/null || printf 'UNKNOWN')"
+            st_val="$(observed_v2_status 2>/dev/null || printf 'UNKNOWN')"
             if [ "$st_val" = RUNNING ] || [ "$st_val" = STARTING ]; then
                 if [ "$stdout_count" -gt 0 ] || [ "$stderr_count" -gt 0 ]; then
                     event_type="PROGRESS"
@@ -613,15 +682,13 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         }
         umask 077
         state_pid="$$"
-        state_ticks="$(awk '{print $22}' "/proc/$$/stat" 2>/dev/null || true)"
-        valid_decimal "$state_ticks" || { printf '%s\n' '无法读取进程起始标记' >&2; exit 46; }
+        # 与取消/查询使用同一解析器；comm 含空格或括号时不能按整行第 22 列读取。
+        read_process_identity "$state_pid" || { printf '%s\n' '无法读取进程起始标记' >&2; exit 46; }
+        state_ticks="$cancel_process_ticks"
         state_started="$(date +%s)"
         handle_signal() {
             trap - HUP INT TERM
-            # 受管 cancel 由取消端确认整个会话已退出后发布终态，不能由主进程提前报成功。
-            signal_status=CANCELLED
-            [ ! -e "$execution_dir/cancel.members" ] || signal_status=UNKNOWN
-            write_v2_state "$signal_status" 143 "$state_pid" "$state_ticks" "$state_started"
+            write_v2_state CANCELLED 143 "$state_pid" "$state_ticks" "$state_started"
             cleanup_v2_runtime
             exit 143
         }
@@ -671,9 +738,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         command_status="$?"
         set -e
         trap - HUP INT TERM
-        if [ -e "$execution_dir/cancel.members" ]; then
-            write_v2_state UNKNOWN '' "$state_pid" "$state_ticks" "$state_started"
-        elif [ "$command_status" -eq 0 ]; then
+        if [ "$command_status" -eq 0 ]; then
             write_v2_state SUCCEEDED "$command_status" "$state_pid" "$state_ticks" "$state_started"
         elif [ "$command_status" -eq 124 ] || [ "$command_status" -eq 137 ]; then
             write_v2_state TIMED_OUT "$command_status" "$state_pid" "$state_ticks" "$state_started"

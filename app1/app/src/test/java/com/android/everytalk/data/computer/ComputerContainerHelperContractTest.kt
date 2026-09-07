@@ -120,7 +120,7 @@ class ComputerContainerHelperContractTest {
         assertTrue(runtimeWrapper.contains("cancel_member_matches"))
         assertTrue(runtimeWrapper.contains("ensure_host_private_dir"))
         assertTrue(runtimeWrapper.contains("root_real=\"$(realpath -e -- \"\$root\""))
-        assertTrue(runtimeWrapper.contains("write_v2_state UNKNOWN"))
+        assertTrue(runtimeWrapper.contains("cancel_unconfirmed=true"))
         assertTrue(runtimeWrapper.contains("request hash 冲突"))
     }
 
