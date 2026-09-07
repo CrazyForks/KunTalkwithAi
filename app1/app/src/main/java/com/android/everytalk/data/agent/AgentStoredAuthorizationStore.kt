@@ -5,6 +5,7 @@ import com.android.everytalk.data.database.entities.AgentStoredAuthorizationEnti
 
 /** 只管理长期授权的非敏感元数据和 Secure Store 引用。 */
 class AgentStoredAuthorizationStore(private val dao: AgentDao) {
+    internal suspend fun get(id: String) = dao.getStoredAuthorization(id)
     suspend fun save(authorization: StoredAuthorization) {
         require(authorization.userConsentScope in setOf("WORKSPACE", "COMPUTER")) { "长期授权范围无效" }
         require(authorization.provider.isNotBlank() && authorization.credentialReference.isNotBlank()) {
@@ -50,4 +51,5 @@ class AgentStoredAuthorizationStore(private val dao: AgentDao) {
     }
 
     suspend fun revoke(id: String): Boolean = dao.revokeStoredAuthorization(id) == 1
+
 }

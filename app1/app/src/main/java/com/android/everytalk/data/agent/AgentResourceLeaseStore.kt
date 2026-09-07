@@ -24,4 +24,5 @@ class AgentResourceLeaseStore(private val dao: AgentDao) {
 
     suspend fun revoke(resourceRef: String, leaseKind: String, owner: String): Boolean =
         dao.revokeResourceLease(resourceRef, leaseKind, owner) == 1
+
 }

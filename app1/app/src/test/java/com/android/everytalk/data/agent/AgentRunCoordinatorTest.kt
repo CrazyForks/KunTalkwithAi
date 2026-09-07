@@ -2,6 +2,8 @@ package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.test.runTest
+import java.util.concurrent.ConcurrentHashMap
 import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
@@ -87,6 +89,52 @@ class AgentRunCoordinatorTest {
         assertTrue(recovery.contains("resumableApprovalRuns(computerDao)"))
         assertTrue(recovery.contains("resumeRun(run, record)"))
         assertTrue(source.contains("approvalDecision = approvalDecision"))
+    }
+
+    @Test
+    fun `极快完成的任务不会在完成后重新登记成活跃`() = runTest {
+        val jobs = ConcurrentHashMap<String, Job>()
+        val pauses = AgentRunPauseController()
+        val job = launchTrackedAgentJob(jobs, "message:fast", pauses, "fast") { }
+        assertEquals(job, jobs["message:fast"])
+        job.start()
+        job.join()
+        assertTrue(jobs.isEmpty())
+        assertTrue(pauses.snapshots.value.isEmpty())
+    }
+
+    @Test
+    fun `启动前取消也清理暂停控制槽且不运行任务`() = runTest {
+        val jobs = ConcurrentHashMap<String, Job>()
+        val pauses = AgentRunPauseController()
+        var started = false
+        val job = launchTrackedAgentJob(jobs, "message:cancelled", pauses, "cancelled") { started = true }
+        job.cancel()
+        job.join()
+        assertFalse(started)
+        assertTrue(jobs.isEmpty())
+        assertTrue(pauses.snapshots.value.isEmpty())
+    }
+
+    @Test
+    fun `旧任务尚未收尾时不能被同键的新任务覆盖`() = runTest {
+        val jobs = ConcurrentHashMap<String, Job>()
+        val pauses = AgentRunPauseController()
+        val job = launchTrackedAgentJob(jobs, "message:same", pauses, "same") { }
+        val duplicate = runCatching { launchTrackedAgentJob(jobs, "message:same", pauses, "same") { } }
+        assertTrue(duplicate.isFailure)
+        assertEquals(job, jobs["message:same"])
+        job.cancel()
+        job.join()
+        assertTrue(jobs.isEmpty())
+    }
+
+    @Test
+    fun `恢复准备期间停止任务使旧快照失效`() {
+        assertTrue(canExecuteAgentSnapshot(run, run))
+        assertFalse(canExecuteAgentSnapshot(run, run.copy(status = AgentRunStatus.CANCELLED.name)))
+        assertFalse(canExecuteAgentSnapshot(run, run.copy(runGeneration = run.runGeneration + 1)))
+        assertFalse(canExecuteAgentSnapshot(run, null))
     }
 
     private fun agentRunCoordinatorSource(): String {

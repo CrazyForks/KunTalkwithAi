@@ -1,6 +1,7 @@
 package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -10,6 +11,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentFirstEventTimeoutTest {
+    @Test
+    fun `工具编写开始后不会因等待完整参数触发首响应超时`() = runTest {
+        val events = flow {
+            emit(AppStreamEvent.ExecutionStatusUpdate(TOOL_CALL_WRITING_STATUS))
+            delay(20)
+            emit(AppStreamEvent.Finish("stop"))
+        }.withFirstMeaningfulEventTimeout(timeoutMillis = 10).toList()
+
+        assertEquals(2, events.size)
+        assertTrue(events.last() is AppStreamEvent.Finish)
+    }
+
     @Test
     fun `首个有效事件超时会终止僵死模型流`() = runTest {
         val error = runCatching {

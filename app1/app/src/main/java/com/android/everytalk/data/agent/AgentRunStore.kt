@@ -421,6 +421,11 @@ class AgentRunStore(
         val now = System.currentTimeMillis()
         if (status == AgentRunStatus.CANCELLED) {
             dao.cancelActiveRunById(run.id, terminalReason ?: AgentTerminalReasons.USER_STOP, now)
+            dao.cancelPendingSuspensionsAndSlots(
+                runId = run.id,
+                reason = terminalReason ?: AgentTerminalReasons.USER_STOP,
+                updatedAt = now,
+            )
             dao.revokeGrantsForRun(run.id)
             dao.revokeResourceLeasesForRun(run.id)
             snapshotCache.remove(run.id)
@@ -459,6 +464,11 @@ class AgentRunStore(
         )
         val run = dao.getRunByVisibleMessage(messageId)
         if (changed > 0 && run != null) {
+            dao.cancelPendingSuspensionsAndSlots(
+                runId = run.id,
+                reason = reason,
+                updatedAt = System.currentTimeMillis(),
+            )
             dao.revokeGrantsForRun(run.id)
             dao.revokeResourceLeasesForRun(run.id)
             snapshotCache.remove(run.id)
@@ -538,10 +548,11 @@ class AgentRunStore(
     suspend fun saveUsage(requestId: String, usage: TokenUsage): AgentRequestUsageEntity {
         val prompt = usage.inputTokens?.coerceAtLeast(0L)
         val cacheRead = usage.cachedInputTokens?.coerceAtLeast(0L)
+        val cacheWrite = usage.cacheWriteTokens?.coerceAtLeast(0L)
         val freshInput = when {
             prompt == null -> null
-            cacheRead == null -> prompt
-            else -> (prompt - cacheRead).coerceAtLeast(0L)
+            // 统一输入含缓存读取和写入；三者互斥，写入量不能再算成普通输入。
+            else -> ((prompt - (cacheRead ?: 0L)).coerceAtLeast(0L) - (cacheWrite ?: 0L)).coerceAtLeast(0L)
         }
         val output = usage.outputTokens?.coerceAtLeast(0L)
         val computedTotal = usage.totalTokens?.coerceAtLeast(0L) ?: safeAdd(prompt, output)
@@ -550,7 +561,7 @@ class AgentRunStore(
             promptTokens = prompt,
             freshInputTokens = freshInput,
             cacheReadTokens = cacheRead,
-            cacheWriteTokens = usage.cacheWriteTokens?.coerceAtLeast(0L),
+            cacheWriteTokens = cacheWrite,
             outputTokens = output,
             reasoningTokens = usage.reasoningTokens?.coerceAtLeast(0L),
             requestTotalTokens = computedTotal,
@@ -1093,9 +1104,28 @@ class AgentRunStore(
         val runsByMessageId = dao.getRunsForSession(sessionId)
             .associateBy(AgentRunEntity::visibleAssistantMessageId)
         if (runsByMessageId.isEmpty()) return messages
+        // steering/follow-up 同时会写入普通聊天历史供 UI 展示。它们已经由 AgentEntry
+        // 投影到对应 Run，重新组装上下文时必须跳过历史副本，否则模型会收到两遍用户指令。
+        val projectedQueuedMessageIds = runsByMessageId.values
+            .flatMap { run ->
+                dao.getEntries(run.id)
+                    .asSequence()
+                    .filter { entry ->
+                        entry.status == AgentEntryStatus.FINAL.name &&
+                            entry.kind in setOf(AgentEntryKind.STEERING.name, AgentEntryKind.FOLLOW_UP.name)
+                    }
+                    .mapNotNull { entry ->
+                        runCatching {
+                            json.decodeFromString(AgentSteeringInstruction.serializer(), entry.payloadJson).id
+                        }.getOrNull()
+                    }
+                    .toList()
+            }
+            .toSet()
 
         return buildList {
             messages.forEach { message ->
+                if (message.id in projectedQueuedMessageIds && message.role == "user") return@forEach
                 val run = runsByMessageId[message.id]
                 if (run == null) {
                     add(message)
@@ -1153,6 +1183,12 @@ class AgentRunStore(
                 return@forEach
             }
             when (entry.kind) {
+                AgentEntryKind.STEERING.name,
+                AgentEntryKind.FOLLOW_UP.name,
+                -> {
+                    val instruction = json.decodeFromString(AgentSteeringInstruction.serializer(), entry.payloadJson)
+                    add(ExecutionTraceEvent.UserMessageBoundary(instruction.id, entry.finalizedAt ?: entry.createdAt))
+                }
                 AgentEntryKind.ASSISTANT.name -> {
                     val blocks = decodeAssistantBlocks(entry)
                     blocks.forEach { block ->
@@ -1192,6 +1228,11 @@ class AgentRunStore(
     suspend fun latestCompaction(sessionId: String): AgentCompactionEntryEntity? =
         dao.getLatestCompaction(sessionId)
 
+    /** 只读检查队列是否仍有待注入消息，用于区分“确实没有队列”和“队列存在但无法恢复”。 */
+    suspend fun hasPendingQueuedMessages(runId: String, sessionId: String): Boolean =
+        dao.getPendingSteering(runId).isNotEmpty() ||
+            dao.getPendingFollowUpHead(sessionId)?.status == "PENDING"
+
     /** 完整 steering 入队。载荷只含正文、Skill 引用和附件文件引用。 */
     suspend fun enqueueSteering(runId: String, instruction: AgentSteeringInstruction): Boolean {
         val run = dao.getRun(runId) ?: return false
@@ -1210,7 +1251,10 @@ class AgentRunStore(
      * 在模型轮次之间消费 steering。Pi 默认 one-at-a-time，剩余消息留到下一模型边界。
      * 队列消费、Transcript 事实和新增 Skill 冻结快照在同一 Room 事务提交。
      */
-    suspend fun consumePendingSteering(runId: String): List<AbstractApiMessage> {
+    suspend fun consumePendingSteering(
+        runId: String,
+        onConsumed: suspend (AgentSteeringInstruction) -> Unit = {},
+    ): List<AbstractApiMessage> {
         val consumed = entryAppendLock.withLock {
             val steering = dao.getPendingSteering(runId).firstOrNull() ?: return@withLock null
             val instruction = steering.payloadJson?.let { payload ->
@@ -1240,6 +1284,8 @@ class AgentRunStore(
             prepared
         } ?: return emptyList()
         mergeExecutionCheckpointInstruction(runId, consumed.instruction.content)
+        // 事务成功后、下一轮模型前通知显示层；不能在点击时截断仍未结束的 LLM turn。
+        onConsumed(consumed.instruction)
         return listOf(consumed.message)
     }
 
@@ -1360,8 +1406,8 @@ class AgentRunStore(
         providerName = request.provider,
     )
 
-    /** 只有没有待处理 steering 时才能把 Run 原子结束，避免 steer 与完成竞态。 */
-    suspend fun completeRunIfNoPendingSteering(
+    /** 只有没有待处理 steering/follow-up 时才能把 Run 原子结束，避免队列与完成竞态。 */
+    suspend fun completeRunIfNoQueuedMessages(
         run: AgentRunEntity,
         requestOrdinal: Int,
         terminalReason: String?,

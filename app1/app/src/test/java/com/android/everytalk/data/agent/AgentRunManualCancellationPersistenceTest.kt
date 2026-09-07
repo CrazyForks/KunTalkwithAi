@@ -60,6 +60,20 @@ class AgentRunManualCancellationPersistenceTest {
         )
     }
 
+    @Test
+    fun `停止后的迟到恢复更新不能重新激活任务`() = runBlocking {
+        database.chatDao().insertSession(ChatSessionEntity("session-1", 1L, 1L, false))
+        val snapshot = run("run-stopped", "message-stopped", AgentRunStatus.MODEL_CONTINUATION_PENDING)
+        database.agentDao().upsertRun(snapshot)
+        store.cancelActiveRunByVisibleMessage(snapshot.visibleAssistantMessageId, AgentTerminalReasons.USER_STOP)
+        store.updateRunStatus(snapshot, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+        store.updateRunStatus(snapshot, AgentRunStatus.MODEL_CONTINUATION_PENDING)
+        val persisted = database.agentDao().getRun(snapshot.id)
+        assertEquals(AgentRunStatus.CANCELLED.name, persisted?.status)
+        assertEquals(AgentTerminalReasons.USER_STOP, persisted?.terminalReason)
+        org.junit.Assert.assertTrue(database.agentDao().getPendingModelContinuationRuns().isEmpty())
+    }
+
     private fun run(id: String, messageId: String, status: AgentRunStatus) = AgentRunEntity(
         id = id,
         sessionId = "session-1",

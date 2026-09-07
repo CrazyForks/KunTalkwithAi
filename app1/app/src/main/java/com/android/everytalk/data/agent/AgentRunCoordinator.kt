@@ -19,6 +19,7 @@ import com.android.everytalk.util.AgentNotificationManager
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.data.skill.SkillRepository
 import com.android.everytalk.data.skill.SkillRuntimeTools
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.callbackFlow
@@ -102,21 +104,72 @@ class AgentRunCoordinator(
         )
     }
     private val interventionStore by lazy { AgentInterventionStore(agentDao) }
-    private val interventionRecovery by lazy { AgentInterventionRecovery(agentDao, interventionStore) }
+    private val interventionPolicyRegistry by lazy { AgentInterventionPolicyRegistry() }
+    private val capabilityGrantStore by lazy { AgentCapabilityGrantStore(agentDao) }
+    private val interventionResourceLeaseStore by lazy { AgentResourceLeaseStore(agentDao) }
+    private val interventionCredentialStore by lazy {
+        com.android.everytalk.data.computer.ComputerCredentialStore(appContext)
+    }
+    private val interventionStoredAuthorizationStore by lazy { AgentStoredAuthorizationStore(agentDao) }
+    private val interventionAuthorizationManager by lazy {
+        AgentAuthorizationManager(
+            interventionStoredAuthorizationStore,
+            interventionCredentialStore,
+        )
+    }
+    private val interventionAdapterRegistry by lazy {
+        AgentInterventionAdapterRegistry(
+            mapOf(
+                "git-adapter" to StoredAuthorizationCapabilityAdapter(
+                    "github",
+                    interventionStoredAuthorizationStore,
+                    interventionCredentialStore,
+                ),
+                "skill-capability-proxy" to StoredAuthorizationCapabilityAdapter(
+                    "openai",
+                    interventionStoredAuthorizationStore,
+                    interventionCredentialStore,
+                ),
+            ),
+        )
+    }
+    private val interventionRecovery by lazy {
+        AgentInterventionRecovery(
+            agentDao,
+            interventionStore,
+            registry = interventionPolicyRegistry,
+            broker = interventionBroker,
+        )
+    }
     private val interventionBroker by lazy {
-        AgentInterventionBroker(interventionStore) { ticket ->
-            val suspension = ticket.suspension
-            _pendingInterventions.value = (
-                _pendingInterventions.value.filterNot { it.suspensionId == suspension.id } +
-                    PendingIntervention(
-                        suspensionId = suspension.id,
-                        runId = suspension.runId,
-                        capabilityId = suspension.capabilityId,
-                        state = SuspensionState.valueOf(suspension.status),
-                        resolutionNonce = ticket.resolutionNonce,
-                    )
-                )
-        }
+        AgentInterventionBroker(
+            store = interventionStore,
+            registry = interventionPolicyRegistry,
+            adapters = interventionAdapterRegistry,
+            grants = capabilityGrantStore,
+            resourceLeases = interventionResourceLeaseStore,
+            onSuspended = { ticket ->
+                val suspension = ticket.suspension
+                _pendingInterventions.update { current ->
+                    val existing = current.firstOrNull { it.suspensionId == suspension.id }
+                    current.filterNot { it.suspensionId == suspension.id } +
+                        PendingIntervention(
+                            suspensionId = suspension.id,
+                            runId = suspension.runId,
+                            sessionId = ticket.sessionId,
+                            capabilityId = suspension.capabilityId,
+                            reasonSafe = suspension.reasonSafe,
+                            userVisibleContext = suspension.userVisibleContext,
+                            materialKind = ResolutionMaterialKind.valueOf(suspension.resolutionMaterialKind),
+                            fields = interventionPolicyRegistry.resolve(suspension.capabilityId)?.fields.orEmpty(),
+                            requestSource = InterventionRequestSource.valueOf(suspension.requestSource),
+                            rowVersion = suspension.rowVersion,
+                            state = SuspensionState.valueOf(suspension.status),
+                            resolutionNonce = ticket.resolutionNonce ?: existing?.resolutionNonce,
+                        )
+                }
+            },
+        )
     }
     private val agentToolResultStore by lazy { AgentToolResultStore(appContext) }
     private val skillRepository by lazy { SkillRepository(appContext, database.skillDao()) }
@@ -137,6 +190,8 @@ class AgentRunCoordinator(
 
     private val _events = MutableSharedFlow<Pair<String, AppStreamEvent>>(extraBufferCapacity = 128)
     val events = _events.asSharedFlow()
+    private val _lifecycleEvents = MutableSharedFlow<AgentLifecycleEvent>(extraBufferCapacity = 128)
+    val lifecycleEvents = _lifecycleEvents.asSharedFlow()
     private val _pendingInterventions = MutableStateFlow<List<PendingIntervention>>(emptyList())
     val pendingInterventions = _pendingInterventions.asStateFlow()
 
@@ -151,6 +206,13 @@ class AgentRunCoordinator(
             computerSessionStateProvider = computerSessionStateProvider,
             pauseController = pauseController,
             interventionBroker = interventionBroker,
+            apiKeyProvider = { run, request ->
+                run.configIdSnapshot
+                    ?.let { configId -> database.apiConfigDao().getTextConfig(configId)?.key }
+                    ?.takeIf(String::isNotBlank)
+                    ?: request.apiKey
+            },
+            lifecycleSink = { event -> _lifecycleEvents.emit(event) },
         )
     }
 
@@ -176,11 +238,15 @@ class AgentRunCoordinator(
     fun run(request: AgentLoopRequest): Flow<AppStreamEvent> = callbackFlow {
         val jobKey = request.existingRun?.id?.let { "run:$it" }
             ?: "message:${request.visibleAssistantMessageId}"
-        pauseController.register(request.visibleAssistantMessageId)
         val uiAttached = AtomicBoolean(true)
-        val job = scope.launch {
-            val foregroundActivity = ComputerConnectionServiceController.acquireAgentRun(appContext)
+        val job = scope.launchTrackedAgentJob(activeJobs, jobKey, pauseController, request.visibleAssistantMessageId) {
+            var foregroundActivity: java.io.Closeable? = null
             try {
+                request.existingRun?.let { snapshot ->
+                    if (!canExecuteAgentSnapshot(snapshot, agentDao.getRun(snapshot.id))) return@launchTrackedAgentJob
+                }
+                foregroundActivity = ComputerConnectionServiceController.acquireAgentRun(appContext)
+                AgentRecoveryDiagnostics.runtime("started", request.visibleAssistantMessageId)
                 agentLoop.run(request).collect { event ->
                     if (!uiAttached.get()) {
                         _events.emit(request.visibleAssistantMessageId to event)
@@ -203,10 +269,21 @@ class AgentRunCoordinator(
                 val completedRun = agentDao.getRunByVisibleMessage(request.visibleAssistantMessageId)
                 updateResumeRetryAfterRun(completedRun)
                 notifyTerminalRun(completedRun)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // 包括前台服务启动失败。错误必须传回 UI，不能从应用级 scope 逃逸成崩溃。
+                android.util.Log.e("AgentRuntime", "run_failed type=${error.javaClass.simpleName}")
+                if (uiAttached.get()) {
+                    close(error)
+                } else {
+                    _events.emit(request.visibleAssistantMessageId to AppStreamEvent.Error("任务执行中断，请核对任务状态"))
+                    _events.emit(request.visibleAssistantMessageId to AppStreamEvent.Finish("agent_failed"))
+                }
             } finally {
-                foregroundActivity.close()
-                activeJobs.remove(jobKey)
-                pauseController.finish(request.visibleAssistantMessageId)
+                runCatching { foregroundActivity?.close() }.onFailure {
+                    android.util.Log.e("AgentRuntime", "foreground_release_failed type=${it.javaClass.simpleName}")
+                }
                 visibleRunCancellationReasons[request.visibleAssistantMessageId]?.let { reason ->
                     withContext(NonCancellable) {
                         agentRunStore.cancelActiveRunByVisibleMessage(
@@ -216,14 +293,16 @@ class AgentRunCoordinator(
                         visibleRunCancellationReasons.remove(request.visibleAssistantMessageId, reason)
                     }
                 }
+                AgentRecoveryDiagnostics.runtime("ended", request.visibleAssistantMessageId)
                 close()
             }
         }
-        activeJobs[jobKey]?.cancel()
-        activeJobs[jobKey] = job
+        // 即使 scope 已取消、Job 尚未进入函数体，也必须关闭 UI 通道，避免永久挂起。
+        job.invokeOnCompletion { error -> close(error) }
         visibleRunCancellationReasons[request.visibleAssistantMessageId]?.let { reason ->
             job.cancel(CancellationException(reason))
         }
+        job.start()
         // UI Collector 消失时不取消 job；前台服务和 Room 继续持有任务事实。
         awaitClose { uiAttached.set(false) }
     }
@@ -319,10 +398,13 @@ class AgentRunCoordinator(
             approvalDecision = approvalDecision,
         )
 
-        pauseController.register(run.visibleAssistantMessageId)
-        val job = scope.launch {
-            val foregroundActivity = ComputerConnectionServiceController.acquireAgentRun(appContext)
+        val job = scope.launchTrackedAgentJob(activeJobs, jobKey, pauseController, run.visibleAssistantMessageId) {
+            var foregroundActivity: java.io.Closeable? = null
             try {
+                // 恢复准备包含多次挂起读取；期间可能已收到停止，启动前必须再次核对 generation。
+                if (!canExecuteAgentSnapshot(run, agentDao.getRun(run.id))) return@launchTrackedAgentJob
+                foregroundActivity = ComputerConnectionServiceController.acquireAgentRun(appContext)
+                AgentRecoveryDiagnostics.runtime("resumed", run.visibleAssistantMessageId)
                 agentLoop.run(loopRequest).collect { event ->
                     _events.emit(run.visibleAssistantMessageId to event)
                 }
@@ -340,21 +422,22 @@ class AgentRunCoordinator(
                     terminalReason = AgentTerminalReasons.MODEL_CONTINUATION_PENDING,
                 )
             } finally {
-                foregroundActivity.close()
-                activeJobs.remove(jobKey)
-                pauseController.finish(run.visibleAssistantMessageId)
+                runCatching { foregroundActivity?.close() }.onFailure {
+                    android.util.Log.e("AgentRuntime", "foreground_release_failed type=${it.javaClass.simpleName}")
+                }
                 visibleRunCancellationReasons[run.visibleAssistantMessageId]?.let { reason ->
                     withContext(NonCancellable) {
                         agentRunStore.cancelActiveRunByVisibleMessage(run.visibleAssistantMessageId, reason)
                         visibleRunCancellationReasons.remove(run.visibleAssistantMessageId, reason)
                     }
                 }
+                AgentRecoveryDiagnostics.runtime("ended", run.visibleAssistantMessageId)
             }
         }
-        activeJobs[jobKey] = job
         visibleRunCancellationReasons[run.visibleAssistantMessageId]?.let { reason ->
             job.cancel(CancellationException(reason))
         }
+        job.start()
         return true
     }
 
@@ -372,8 +455,10 @@ class AgentRunCoordinator(
 
     /** App 启动时显式扫描全部非终态 Suspension，包括 RESOLUTION_RECEIVED 与 DELIVERED。 */
     suspend fun recoverInterventions(): List<AgentInterventionRecovery.RecoveryAction> {
-        val actions = interventionRecovery.recover()
         val nonceById = _pendingInterventions.value.associate { it.suspensionId to it.resolutionNonce }.toMutableMap()
+        val actions = interventionRecovery.recover(
+            activeNonceIds = nonceById.filterValues { it != null }.keys,
+        )
         actions.forEach { action ->
             if (action.newResolutionNonce != null) nonceById[action.suspensionId] = action.newResolutionNonce
         }
@@ -385,23 +470,196 @@ class AgentRunCoordinator(
                     SuspensionState.USER_DECISION_REQUIRED.name,
                 )
             }
-            .map { suspension ->
+            .mapNotNull { suspension ->
+                val pendingRun = interventionStore.getRun(suspension.runId) ?: return@mapNotNull null
+                if (pendingRun.runGeneration != suspension.runGeneration || pendingRun.status in setOf(
+                        AgentRunStatus.COMPLETED.name,
+                        AgentRunStatus.FAILED.name,
+                        AgentRunStatus.CANCELLED.name,
+                    )
+                ) return@mapNotNull null
                 PendingIntervention(
                     suspensionId = suspension.id,
                     runId = suspension.runId,
+                    sessionId = pendingRun.sessionId,
                     capabilityId = suspension.capabilityId,
+                    reasonSafe = suspension.reasonSafe,
+                    userVisibleContext = suspension.userVisibleContext,
+                    materialKind = ResolutionMaterialKind.valueOf(suspension.resolutionMaterialKind),
+                    fields = interventionPolicyRegistry.resolve(suspension.capabilityId)?.fields.orEmpty(),
+                    requestSource = InterventionRequestSource.valueOf(suspension.requestSource),
+                    rowVersion = suspension.rowVersion,
                     state = SuspensionState.valueOf(suspension.status),
                     resolutionNonce = nonceById[suspension.id],
                 )
             }
+        interventionStore.startupCandidates()
+            .filter { suspension ->
+                suspension.status in setOf(
+                    SuspensionState.READY_TO_RESUME.name,
+                    SuspensionState.READY_TO_RESUME_WITH_FAILURE.name,
+                    SuspensionState.RESUMING.name,
+                    SuspensionState.RESUMED.name,
+                )
+            }
+            .forEach { suspension -> resumeSuspension(suspension.id) }
         return actions
     }
 
+    /**
+     * 只恢复当前 Suspension 对应的 control-tool slot。ToolResult 使用稳定 ID 幂等写入，
+     * sibling slot 的已完成结果不会重放。RESUMED 仍可在冷启动时重新触发丢失的 wake-up。
+     */
+    private suspend fun resumeSuspension(suspensionId: String): Boolean {
+        var suspension = interventionStore.get(suspensionId) ?: return false
+        val initialState = SuspensionState.valueOf(suspension.status)
+        if (initialState in setOf(
+                SuspensionState.READY_TO_RESUME,
+                SuspensionState.READY_TO_RESUME_WITH_FAILURE,
+            )
+        ) {
+            if (!interventionStore.claimResume(
+                    suspension.id,
+                    initialState,
+                    suspension.rowVersion,
+                    suspension.runGeneration,
+                    java.util.UUID.randomUUID().toString(),
+                )
+            ) return false
+            suspension = interventionStore.get(suspension.id) ?: return false
+        }
+        val state = SuspensionState.valueOf(suspension.status)
+        if (state == SuspensionState.RESUMING) {
+            val failed = !suspension.failureCode.isNullOrBlank()
+            agentRunStore.appendToolResult(
+                runId = suspension.runId,
+                requestId = suspension.requestId,
+                result = AgentContentBlock.ToolResult(
+                    toolCallId = suspension.toolCallId,
+                    toolName = AgentControlToolNames.REQUEST_CAPABILITY,
+                    content = kotlinx.serialization.json.JsonPrimitive(
+                        if (failed) {
+                            "能力接力未完成：${suspension.failureCode}。请根据当前条件重新规划。"
+                        } else {
+                            "所需能力已由本地 Broker 准备完成。授权仅限当前 Run、Tool 和目标。"
+                        },
+                    ),
+                    isError = failed,
+                ),
+            )
+            if (!interventionStore.finishResume(suspension.id, suspension.rowVersion)) return false
+            suspension = interventionStore.get(suspension.id) ?: return false
+        }
+        if (suspension.status != SuspensionState.RESUMED.name) return false
+        val run = agentDao.getRun(suspension.runId) ?: return false
+        if (run.runGeneration != suspension.runGeneration || run.status in setOf(
+                AgentRunStatus.COMPLETED.name,
+                AgentRunStatus.FAILED.name,
+                AgentRunStatus.CANCELLED.name,
+            )
+        ) return false
+
+        val siblingBlocksRun = interventionStore.startupCandidates().any { sibling ->
+            sibling.runId == run.id && sibling.id != suspension.id &&
+                sibling.status !in setOf(SuspensionState.RESUMED.name)
+        }
+        if (siblingBlocksRun) return false
+        return resumeRun(run)
+    }
+
     /** 只消费当前 Suspension 的一次性 resolution nonce；真正 Secret 仍由后续 Adapter 接管。 */
-    suspend fun resolveIntervention(suspensionId: String, expectedVersion: Long, resolutionNonce: String): Boolean {
-        val resolved = interventionBroker.resolve(suspensionId, expectedVersion, resolutionNonce)
+    suspend fun resolveIntervention(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        material: ProtectedResolution = ProtectedResolution.None,
+    ): Boolean {
+        val resolved = interventionBroker.resolve(suspensionId, expectedVersion, resolutionNonce, material)
         if (resolved) recoverInterventions()
         return resolved
+    }
+
+    /** 调用方的可变缓冲区无论提交成功与否都在返回前清零。 */
+    suspend fun resolveEphemeralIntervention(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        secret: CharArray,
+    ): Boolean = try {
+        resolveIntervention(
+            suspensionId,
+            expectedVersion,
+            resolutionNonce,
+            ProtectedResolution.Ephemeral(secret),
+        )
+    } finally {
+        secret.fill('\u0000')
+    }
+
+    suspend fun resolveDurableIntervention(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        secureReference: String,
+    ): Boolean = resolveIntervention(
+        suspensionId,
+        expectedVersion,
+        resolutionNonce,
+        ProtectedResolution.DurableReference(secureReference),
+    )
+
+    /** 可信 UI 新建长期授权。Secret 进入 Keystore 后只用非敏感引用继续 Broker。 */
+    suspend fun createAndResolveAuthorizationIntervention(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        secret: CharArray,
+    ): Boolean {
+        val suspension = interventionStore.get(suspensionId) ?: run {
+            secret.fill('\u0000')
+            return false
+        }
+        val provider = when (suspension.capabilityId) {
+            "git.push" -> "github"
+            "skill.openai_api_access" -> "openai"
+            else -> {
+                secret.fill('\u0000')
+                return false
+            }
+        }
+        val workspaceId = suspension.targetBindingRef
+            .substringAfter(":workspace:", missingDelimiterValue = "")
+            .takeIf(String::isNotBlank)
+            ?: run {
+                secret.fill('\u0000')
+                return false
+            }
+        val reference = interventionAuthorizationManager.saveWorkspaceAuthorization(
+            provider = provider,
+            workspaceId = workspaceId,
+            secret = secret,
+        )
+        val resolved = resolveDurableIntervention(suspensionId, expectedVersion, resolutionNonce, reference)
+        if (!resolved) interventionAuthorizationManager.discard(reference)
+        return resolved
+    }
+
+    suspend fun rejectIntervention(suspensionId: String, expectedVersion: Long): Boolean {
+        val rejected = interventionBroker.reject(suspensionId, expectedVersion)
+        if (rejected) recoverInterventions()
+        return rejected
+    }
+
+    suspend fun confirmUnknownInterventionDelivered(suspensionId: String, expectedVersion: Long): Boolean {
+        val confirmed = interventionBroker.confirmUnknownDelivered(suspensionId, expectedVersion)
+        if (confirmed) recoverInterventions()
+        return confirmed
+    }
+
+    suspend fun continueAfterUnknownIntervention(suspensionId: String, expectedVersion: Long): Boolean {
+        val continued = interventionBroker.continueAfterUnknown(suspensionId, expectedVersion)
+        if (continued) recoverInterventions()
+        return continued
     }
 
     /**
@@ -428,14 +686,13 @@ class AgentRunCoordinator(
                 AgentRunStatus.CANCELLED,
                 terminalReason = reason,
             )
-            activeJobs.remove("run:$runId")?.cancel(CancellationException(reason))
+            activeJobs["run:$runId"]?.cancel(CancellationException(reason))
         }
     }
 
     /** 全局停止必须等待 Job 收尾，再统一封存 Room，防止服务消失后模型流继续写入。 */
     suspend fun cancelAllActiveRuns(reason: String = AgentTerminalReasons.USER_STOP) {
         val jobs = activeJobs.values.distinct()
-        activeJobs.clear()
         // 先让持久 generation 失效，再停止内存 Job；外部 callback/claim 不能穿过终止窗口。
         agentDao.getActiveRuns().forEach { run ->
             agentRunStore.cancelOpenRequests(run.id, reason)
@@ -455,13 +712,13 @@ class AgentRunCoordinator(
     /** 用户第一次点击就登记停止；即使 Run 尚未写入 Room，稍后登记的 Job 也会立即取消。 */
     fun cancelVisibleRun(messageId: String, reason: String = AgentTerminalReasons.USER_STOP) {
         visibleRunCancellationReasons[messageId] = reason
-        val messageJob = activeJobs.remove("message:$messageId")
+        val messageJob = activeJobs["message:$messageId"]
         messageJob?.cancel(CancellationException(reason))
         scope.launch {
             // 已存在的 Run 先终止持久状态，随后再等待执行协程清理。
             agentRunStore.cancelActiveRunByVisibleMessage(messageId, reason)?.let { run ->
                 resumeRetryStates.remove(run.id)
-                activeJobs.remove("run:${run.id}")?.let { runJob ->
+                activeJobs["run:${run.id}"]?.let { runJob ->
                     runJob.cancel(CancellationException(reason))
                     runJob.join()
                 }
@@ -587,8 +844,8 @@ internal fun shouldBackoffAgentResume(status: String?): Boolean =
 internal fun isAgentRunActive(
     activeJobs: Map<String, Job>,
     run: AgentRunEntity,
-): Boolean = activeJobs["run:${run.id}"]?.isActive == true ||
-    activeJobs["message:${run.visibleAssistantMessageId}"]?.isActive == true
+): Boolean = listOf("run:${run.id}", "message:${run.visibleAssistantMessageId}")
+    .any { key -> activeJobs[key]?.let { !it.isCompleted && !it.isCancelled } == true }
 
 /** 只有实际使用过 VPS 且整个 Run 已结束时，才允许发送最终通知。 */
 internal fun shouldNotifyAgentRunTerminal(
@@ -599,3 +856,31 @@ internal fun shouldNotifyAgentRunTerminal(
     AgentRunStatus.FAILED,
     AgentRunStatus.CANCELLED,
 )
+
+/**
+ * 先登记再启动，极快完成和启动前取消都通过 completion 清理同一份运行记录。
+ * 调用方先绑定关闭通道等回调，再调用 start；仍在收尾的旧任务禁止被另一轮覆盖。
+ */
+internal fun CoroutineScope.launchTrackedAgentJob(
+    activeJobs: ConcurrentHashMap<String, Job>,
+    jobKey: String,
+    pauseController: AgentRunPauseController,
+    messageId: String,
+    block: suspend CoroutineScope.() -> Unit,
+): Job = synchronized(activeJobs) {
+    check(activeJobs[jobKey]?.isCompleted != false) { "Agent task is already registered" }
+    val job = launch(start = CoroutineStart.LAZY, block = block)
+    activeJobs[jobKey] = job
+    pauseController.register(messageId)
+    job.invokeOnCompletion {
+        synchronized(activeJobs) {
+            if (activeJobs.remove(jobKey, job)) pauseController.finish(messageId)
+        }
+    }
+    job
+}
+
+/** 已停止或 generation 失效的恢复快照绝不能再次调用模型、执行工具。 */
+internal fun canExecuteAgentSnapshot(snapshot: AgentRunEntity, persisted: AgentRunEntity?): Boolean =
+    persisted != null && persisted.runGeneration == snapshot.runGeneration &&
+        persisted.status !in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name, AgentRunStatus.CANCELLED.name)

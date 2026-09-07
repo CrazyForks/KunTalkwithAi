@@ -105,6 +105,152 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
+    fun `已经收到部分正文的网络失败禁止自动重试`() = runBlocking {
+        val sessionId = "provider-partial-no-retry"
+        seedSession(sessionId)
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                flowOf(
+                    AppStreamEvent.Content("已经收到一部分正文"),
+                    AppStreamEvent.Error(
+                        message = "connection reset",
+                        code = "connection_aborted",
+                        type = "retryable_network",
+                    ),
+                )
+            },
+        )
+
+        val events = loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList()
+        val run = database.agentDao().getRunsForSession(sessionId).single()
+
+        assertEquals(AgentRunStatus.FAILED.name, run.status)
+        assertTrue(store.getPendingModelContinuationRuns().none { it.id == run.id })
+        assertTrue(events.filterIsInstance<AppStreamEvent.Error>().any { it.code == "connection_aborted" })
+        assertTrue(events.filterIsInstance<AppStreamEvent.Error>().none { it.code == "provider_retry_exhausted" })
+    }
+
+    @Test
+    fun `每次 Provider attempt 都重新解析 API Key`() = runBlocking {
+        val sessionId = "dynamic-api-key"
+        seedSession(sessionId)
+        var currentKey = "key-first"
+        val observedKeys = mutableListOf<String>()
+        val loop = AgentLoop(
+            runStore = store,
+            apiKeyProvider = { _, _ -> currentKey },
+            modelTransport = ModelTurnTransport { turn ->
+                observedKeys += turn.request.apiKey
+                flowOf(
+                    AppStreamEvent.Error(
+                        message = "connection reset",
+                        code = "connection_aborted",
+                        type = "retryable_network",
+                    ),
+                )
+            },
+        )
+        val baseRequest = loopRequest(sessionId)
+        loop.run(baseRequest).toList()
+        currentKey = "key-second"
+        val run = checkNotNull(database.agentDao().getRunsForSession(sessionId).single())
+
+        loop.run(baseRequest.copy(existingRun = run)).toList()
+
+        assertEquals(listOf("key-first", "key-second"), observedKeys)
+    }
+
+    @Test
+    fun `Provider恢复仍属于同一Agent生命周期`() = runBlocking {
+        val sessionId = "single-lifecycle-across-retry"
+        seedSession(sessionId)
+        var attempt = 0
+        val lifecycle = mutableListOf<AgentLifecycleEvent>()
+        val loop = AgentLoop(
+            runStore = store,
+            lifecycleSink = { lifecycle += it },
+            modelTransport = ModelTurnTransport {
+                attempt++
+                if (attempt == 1) {
+                    flowOf(
+                        AppStreamEvent.Error(
+                            message = "connection reset",
+                            code = "connection_aborted",
+                            type = "retryable_network",
+                        ),
+                    )
+                } else {
+                    flowOf(AppStreamEvent.Content("恢复完成"), AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+        val baseRequest = loopRequest(sessionId, compactThresholdTokens = 8_000)
+
+        loop.run(baseRequest).toList()
+        val run = database.agentDao().getRunsForSession(sessionId).single()
+        loop.run(baseRequest.copy(existingRun = run)).toList()
+
+        assertEquals(1, lifecycle.count { it.phase == AgentLifecyclePhase.AGENT_START })
+        assertEquals(1, lifecycle.count { it.phase == AgentLifecyclePhase.AGENT_END })
+        assertEquals(1, lifecycle.count { it.phase == AgentLifecyclePhase.TURN_START })
+        assertEquals(1, lifecycle.count { it.phase == AgentLifecyclePhase.TURN_END })
+        assertEquals(AgentLifecyclePhase.AGENT_END, lifecycle.last().phase)
+    }
+
+    @Test
+    fun `无工具模型轮发送完整Pi生命周期且不携带正文`() = runBlocking {
+        val sessionId = "lifecycle-no-tools"
+        seedSession(sessionId)
+        val lifecycle = mutableListOf<AgentLifecycleEvent>()
+        val secretText = "secret-message-body"
+        val loop = AgentLoop(
+            runStore = store,
+            lifecycleSink = { lifecycle += it },
+            modelTransport = ModelTurnTransport {
+                flowOf(AppStreamEvent.Content(secretText), AppStreamEvent.Finish("stop"))
+            },
+        )
+
+        loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList()
+
+        assertEquals(
+            listOf(
+                AgentLifecyclePhase.AGENT_START,
+                AgentLifecyclePhase.TURN_START,
+                AgentLifecyclePhase.MESSAGE_START,
+                AgentLifecyclePhase.MESSAGE_END,
+                AgentLifecyclePhase.TURN_END,
+                AgentLifecyclePhase.AGENT_END,
+            ),
+            lifecycle.map(AgentLifecycleEvent::phase),
+        )
+        assertTrue(lifecycle.none { secretText in it.toString() })
+    }
+
+    @Test
+    fun `正常结束但只有空思考时明确失败`() = runBlocking {
+        val sessionId = "empty-final-response"
+        seedSession(sessionId)
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                flowOf(
+                    AppStreamEvent.Reasoning("", thoughtSignature = "c2ln"),
+                    AppStreamEvent.Finish("stop"),
+                )
+            },
+        )
+
+        val events = loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList()
+        val run = database.agentDao().getRunsForSession(sessionId).single()
+
+        assertEquals(AgentRunStatus.FAILED.name, run.status)
+        assertTrue(events.filterIsInstance<AppStreamEvent.Error>().any { it.code == "empty_model_response" })
+        assertTrue(events.none { it is AppStreamEvent.Finish && it.reason == "stop" })
+    }
+
+    @Test
     fun `Pending只在Agent准备结束时作为同一Run的followUp消费`() = runBlocking {
         val sessionId = "pi-follow-up"
         seedSession(sessionId)

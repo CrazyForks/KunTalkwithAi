@@ -44,6 +44,48 @@ enum class SuspensionState {
 
 enum class ResolutionMaterialKind { NONE, EPHEMERAL, DURABLE_REFERENCE }
 
+/**
+ * 可信 UI 到 Adapter 的受保护输入。该类型不序列化，也不会进入 Agent Tool 参数。
+ * EPHEMERAL 持有可清零副本；调用方提交后应立即清理自己的输入缓冲区。
+ */
+sealed interface ProtectedResolution {
+    val kind: ResolutionMaterialKind
+    fun clear()
+
+    data object None : ProtectedResolution {
+        override val kind = ResolutionMaterialKind.NONE
+        override fun clear() = Unit
+    }
+
+    class Ephemeral(secret: CharArray) : ProtectedResolution {
+        private val value = secret.copyOf()
+        override val kind = ResolutionMaterialKind.EPHEMERAL
+
+        /** 仅限同包可信 Adapter 在 fulfill 调用期间读取，禁止保存返回的数组引用。 */
+        internal fun borrow(): CharArray = value
+
+        override fun clear() = value.fill('\u0000')
+    }
+
+    data class DurableReference(val reference: String) : ProtectedResolution {
+        init {
+            val id = reference.removePrefix(STORED_AUTHORIZATION_PREFIX)
+            require(
+                reference.startsWith(STORED_AUTHORIZATION_PREFIX) &&
+                    id.isNotBlank() && id.length <= 160 &&
+                    id.all { it.isLetterOrDigit() || it in setOf('-', '_', '.', ':') }
+            ) { "只接受 StoredAuthorization 的非敏感引用" }
+        }
+
+        override val kind = ResolutionMaterialKind.DURABLE_REFERENCE
+        override fun clear() = Unit
+
+        private companion object {
+            const val STORED_AUTHORIZATION_PREFIX = "stored-authorization:"
+        }
+    }
+}
+
 enum class ReconciliationOutcome { DELIVERED, NOT_DELIVERED, UNKNOWN }
 
 enum class InterventionRequestSource(val trustLevel: Int) {
@@ -153,6 +195,8 @@ data class TrustedInterventionRequest(
     val executionSlot: String,
     val requestHash: String,
     val capabilityId: String,
+    val reasonSafe: String,
+    val userVisibleContext: String? = null,
     val targetBindingRef: String,
     val requestSource: String,
     val policyVersion: String,
@@ -162,6 +206,7 @@ data class TrustedInterventionRequest(
     val resourceEpoch: Long = 0,
     val continuation: AgentContinuationKind,
     val resolutionMaterialKind: ResolutionMaterialKind,
+    val resolutionReference: String? = null,
     val activeSuspensionIdempotencyKey: String,
 )
 
@@ -176,7 +221,14 @@ object AgentRunTerminalResult {
 data class PendingIntervention(
     val suspensionId: String,
     val runId: String,
+    val sessionId: String,
     val capabilityId: String,
+    val reasonSafe: String,
+    val userVisibleContext: String?,
+    val materialKind: ResolutionMaterialKind,
+    val fields: List<AgentInterventionPolicyRegistry.Field>,
+    val requestSource: InterventionRequestSource,
+    val rowVersion: Long,
     val state: SuspensionState,
     val resolutionNonce: String? = null,
 )

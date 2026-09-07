@@ -11,6 +11,7 @@ import java.util.UUID
 class AgentInterventionStore(private val dao: AgentDao) {
     data class SuspensionTicket(
         val suspension: AgentSuspensionEntity,
+        val sessionId: String,
         val resolutionNonce: String?,
     )
 
@@ -31,6 +32,8 @@ class AgentInterventionStore(private val dao: AgentDao) {
             executionSlot = request.executionSlot,
             requestHash = request.requestHash,
             capabilityId = request.capabilityId,
+            reasonSafe = request.reasonSafe,
+            userVisibleContext = request.userVisibleContext,
             targetBindingRef = request.targetBindingRef,
             requestSource = request.requestSource,
             policyVersion = request.policyVersion,
@@ -91,17 +94,35 @@ class AgentInterventionStore(private val dao: AgentDao) {
         } else persisted
         return SuspensionTicket(
             suspension = finalSuspension,
+            sessionId = run.sessionId,
             resolutionNonce = resolutionNonce.takeIf { finalSuspension.resolutionNonceHash == nonceHash },
         )
     }
 
     suspend fun get(id: String): AgentSuspensionEntity? = dao.getSuspension(id)
 
+    suspend fun getRun(runId: String): com.android.everytalk.data.database.entities.AgentRunEntity? = dao.getRun(runId)
+
     suspend fun claimFulfillment(id: String, expectedVersion: Long, runGeneration: Long, attemptId: String): Boolean =
         dao.claimSuspensionFulfillment(id, expectedVersion, runGeneration, attemptId, System.currentTimeMillis()) == 1
 
-    suspend fun claimResume(id: String, expectedVersion: Long, runGeneration: Long, attemptId: String): Boolean =
-        dao.claimSuspensionResume(id, expectedVersion, runGeneration, attemptId, System.currentTimeMillis()) == 1
+    suspend fun claimResume(
+        id: String,
+        expectedState: SuspensionState,
+        expectedVersion: Long,
+        runGeneration: Long,
+        attemptId: String,
+    ): Boolean = dao.claimSuspensionResumeAndSlot(
+        id,
+        expectedState.name,
+        expectedVersion,
+        runGeneration,
+        attemptId,
+        System.currentTimeMillis(),
+    )
+
+    suspend fun finishResume(id: String, expectedVersion: Long): Boolean =
+        dao.finishSuspensionResume(id, expectedVersion, System.currentTimeMillis())
 
     suspend fun transition(id: String, expectedState: SuspensionState, nextState: SuspensionState, expectedVersion: Long): Boolean =
         dao.compareAndSetSuspension(id, expectedState.name, nextState.name, expectedVersion, System.currentTimeMillis()) == 1
@@ -124,8 +145,20 @@ class AgentInterventionStore(private val dao: AgentDao) {
         sha256(newNonce),
     ) == 1
 
-    suspend fun resolve(id: String, expectedState: SuspensionState, expectedVersion: Long, nonce: String): Boolean =
-        dao.resolveSuspension(id, expectedState.name, expectedVersion, sha256(nonce), System.currentTimeMillis()) == 1
+    suspend fun resolve(
+        id: String,
+        expectedState: SuspensionState,
+        expectedVersion: Long,
+        nonce: String,
+        resolutionReference: String? = null,
+    ): Boolean = dao.resolveSuspension(
+        id,
+        expectedState.name,
+        expectedVersion,
+        sha256(nonce),
+        resolutionReference,
+        System.currentTimeMillis(),
+    ) == 1
 
     suspend fun outcome(
         id: String,
@@ -134,6 +167,22 @@ class AgentInterventionStore(private val dao: AgentDao) {
         expectedVersion: Long,
         failureCode: String? = null,
     ): Boolean = dao.transitionSuspensionOutcome(
+        id,
+        expectedState.name,
+        nextState.name,
+        expectedVersion,
+        failureCode,
+        System.currentTimeMillis(),
+    ) == 1
+
+    /** 外部动作开始后的事实记录不受 Run terminal 阻止，但该方法本身不会恢复 slot 或 AgentLoop。 */
+    suspend fun recordDeliveryFact(
+        id: String,
+        expectedState: SuspensionState,
+        nextState: SuspensionState,
+        expectedVersion: Long,
+        failureCode: String? = null,
+    ): Boolean = dao.recordSuspensionDeliveryFact(
         id,
         expectedState.name,
         nextState.name,
@@ -155,6 +204,7 @@ class AgentInterventionStore(private val dao: AgentDao) {
             SuspensionState.READY_TO_RESUME.name,
             SuspensionState.READY_TO_RESUME_WITH_FAILURE.name,
             SuspensionState.RESUMING.name,
+            SuspensionState.RESUMED.name,
             SuspensionState.USER_DECISION_REQUIRED.name,
         ),
     )

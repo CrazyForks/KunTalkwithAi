@@ -8,7 +8,7 @@ class AgentInterventionRecovery(
     private val dao: AgentDao,
     private val store: AgentInterventionStore,
     private val registry: AgentInterventionPolicyRegistry = AgentInterventionPolicyRegistry(),
-    private val canFulfill: (String) -> Boolean = { false },
+    private val broker: AgentInterventionBroker? = null,
 ) {
     data class RecoveryAction(
         val suspensionId: String,
@@ -17,11 +17,40 @@ class AgentInterventionRecovery(
         val newResolutionNonce: String? = null,
     )
 
-    suspend fun recover(): List<RecoveryAction> = buildList {
+    suspend fun recover(activeNonceIds: Set<String> = emptySet()): List<RecoveryAction> = buildList {
         store.startupCandidates().forEach { suspension ->
             val run = dao.getRun(suspension.runId) ?: return@forEach
             if (run.status in TERMINAL_RUN_STATUSES || run.runGeneration != suspension.runGeneration) {
-                add(RecoveryAction(suspension.id, "TERMINAL_CLEANUP_ONLY"))
+                val state = runCatching { SuspensionState.valueOf(suspension.status) }.getOrNull()
+                if (state in setOf(
+                        SuspensionState.WAITING_USER,
+                        SuspensionState.WAITING_USER_REENTRY,
+                        SuspensionState.RESOLUTION_RECEIVED,
+                        SuspensionState.DELIVERED,
+                        SuspensionState.READY_TO_RESUME,
+                        SuspensionState.READY_TO_RESUME_WITH_FAILURE,
+                        SuspensionState.RESUMING,
+                        SuspensionState.RESUMED,
+                    )
+                ) {
+                    dao.cancelPendingSuspensionsAndSlots(
+                        runId = run.id,
+                        reason = run.terminalReason ?: AgentRunTerminalResult.RUN_TERMINATED,
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                }
+                if (state in setOf(
+                        SuspensionState.FULFILLING,
+                        SuspensionState.DELIVERY_UNKNOWN,
+                        SuspensionState.RECONCILIATION_REQUIRED,
+                        SuspensionState.RECONCILING,
+                    )
+                ) {
+                    val fact = broker?.reconcile(suspension.id)
+                    add(RecoveryAction(suspension.id, "TERMINAL_RECONCILIATION_${fact?.name ?: "REQUIRED"}"))
+                } else {
+                    add(RecoveryAction(suspension.id, "TERMINAL_CLEANUP_ONLY"))
+                }
                 return@forEach
             }
             val state = SuspensionState.valueOf(suspension.status)
@@ -60,14 +89,22 @@ class AgentInterventionRecovery(
                         if (store.enterUserReentry(suspension.id, SuspensionState.RESOLUTION_RECEIVED, suspension.rowVersion, nonce)) {
                             add(RecoveryAction(suspension.id, "WAITING_USER_REENTRY", nonce))
                         }
-                    } else if (canFulfill(suspension.capabilityId) && store.claimFulfillment(suspension.id, suspension.rowVersion, suspension.runGeneration, UUID.randomUUID().toString())) {
-                        add(RecoveryAction(suspension.id, "CLAIMED_FULFILLMENT"))
+                    } else if (broker != null) {
+                        val fact = broker.fulfill(suspension.id)
+                        add(RecoveryAction(suspension.id, "FULFILLMENT_${fact?.name ?: "NOT_CLAIMED"}"))
                     } else {
                         add(RecoveryAction(suspension.id, "FULFILLMENT_PENDING_ADAPTER"))
                     }
                 }
                 SuspensionState.DELIVERED -> {
-                    if (store.transition(suspension.id, SuspensionState.DELIVERED, SuspensionState.READY_TO_RESUME, suspension.rowVersion)) {
+                    if (broker?.recoverDelivered(suspension.id) == true ||
+                        broker == null && store.transition(
+                            suspension.id,
+                            SuspensionState.DELIVERED,
+                            SuspensionState.READY_TO_RESUME,
+                            suspension.rowVersion,
+                        )
+                    ) {
                         add(RecoveryAction(suspension.id, "READY_TO_RESUME"))
                     }
                 }
@@ -75,7 +112,10 @@ class AgentInterventionRecovery(
                 SuspensionState.DELIVERY_UNKNOWN,
                 SuspensionState.RECONCILIATION_REQUIRED,
                 SuspensionState.RECONCILING,
-                -> add(RecoveryAction(suspension.id, "RECONCILIATION_REQUIRED"))
+                -> {
+                    val fact = broker?.reconcile(suspension.id)
+                    add(RecoveryAction(suspension.id, "RECONCILIATION_${fact?.name ?: "REQUIRED"}"))
+                }
                 SuspensionState.READY_TO_RESUME,
                 SuspensionState.RESUMING,
                 SuspensionState.READY_TO_RESUME_WITH_FAILURE,
@@ -83,9 +123,13 @@ class AgentInterventionRecovery(
                 SuspensionState.WAITING_USER,
                 SuspensionState.WAITING_USER_REENTRY,
                 -> {
-                    val nonce = UUID.randomUUID().toString()
-                    if (store.rotateResolutionNonce(suspension.id, state, suspension.rowVersion, nonce)) {
-                        add(RecoveryAction(suspension.id, "PROJECT_TO_UI", nonce))
+                    if (suspension.id in activeNonceIds) {
+                        add(RecoveryAction(suspension.id, "PROJECT_TO_UI"))
+                    } else {
+                        val nonce = UUID.randomUUID().toString()
+                        if (store.rotateResolutionNonce(suspension.id, state, suspension.rowVersion, nonce)) {
+                            add(RecoveryAction(suspension.id, "PROJECT_TO_UI", nonce))
+                        }
                     }
                 }
                 SuspensionState.USER_DECISION_REQUIRED -> add(RecoveryAction(suspension.id, "PROJECT_TO_UI"))

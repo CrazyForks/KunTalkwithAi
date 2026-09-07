@@ -11,6 +11,7 @@ import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
 import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
+import com.android.everytalk.data.database.entities.AgentEntryEntity
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.skill.SkillSourceType
 import io.mockk.coEvery
@@ -341,6 +342,58 @@ class AgentRunStoreContinuationTest {
 
         val updated = checkNotNull(store.decodeRequestSnapshot(run))
         assertEquals(listOf(reference), updated.skillSnapshot?.manualReferences)
+    }
+
+    @Test
+    fun `展开历史时不会把已投影的steering用户消息重复送给模型`() = runBlocking {
+        val run = AgentRunEntity(
+            id = "run-expand",
+            sessionId = "session-expand",
+            userMessageId = "user-1",
+            visibleAssistantMessageId = "assistant-1",
+            configIdSnapshot = "config-1",
+            requestSnapshotJson = Json.encodeToString(
+                AgentRequestSnapshot.serializer(),
+                AgentRequestSnapshot(
+                    messages = emptyList(),
+                    provider = request.provider,
+                    channel = request.channel,
+                    apiAddress = request.apiAddress,
+                    model = request.model,
+                ),
+            ),
+            status = AgentRunStatus.COMPLETED.name,
+            currentRequestOrdinal = 1,
+            terminalReason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        val steering = AgentSteeringInstruction("steer-1", "继续检查", createdAt = 2L)
+        val entry = AgentEntryEntity(
+            id = "steering:steer-1",
+            runId = run.id,
+            sequence = 1L,
+            kind = AgentEntryKind.STEERING.name,
+            requestId = null,
+            toolCallId = null,
+            payloadJson = Json.encodeToString(AgentSteeringInstruction.serializer(), steering),
+            status = AgentEntryStatus.FINAL.name,
+            createdAt = 2L,
+            finalizedAt = 2L,
+        )
+        coEvery { dao.getRunsForSession("session-expand") } returns listOf(run)
+        coEvery { dao.getEntries(run.id) } returns listOf(entry)
+        coEvery { dao.getRequests(run.id) } returns emptyList()
+        coEvery { dao.getRun(run.id) } returns run
+        val messages = listOf(
+            SimpleTextApiMessage(id = "user-1", role = "user", content = "初始"),
+            SimpleTextApiMessage(id = "assistant-1", role = "assistant", content = "旧答案"),
+            SimpleTextApiMessage(id = "steer-1", role = "user", content = "继续检查"),
+        )
+
+        val expanded = store.expandTranscript("session-expand", messages)
+
+        assertEquals(listOf("user-1", "queued:steer-1"), expanded.map { it.id })
     }
 
     @Test

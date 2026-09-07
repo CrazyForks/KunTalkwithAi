@@ -6,6 +6,14 @@ package com.android.everytalk.data.agent
  */
 class AgentInterventionPolicyRegistry {
     enum class Compatibility { COMPATIBLE, POLICY_STALE, ADAPTER_CONTRACT_STALE, CAPABILITY_REMOVED }
+    enum class FieldKind { CONFIRMATION, SENSITIVE_TEXT, AUTHORIZATION_SECRET }
+
+    data class Field(
+        val id: String,
+        val label: String,
+        val kind: FieldKind,
+        val required: Boolean = true,
+    )
 
     data class Policy(
         val capability: String,
@@ -14,12 +22,24 @@ class AgentInterventionPolicyRegistry {
         val continuation: AgentContinuationKind,
         val materialKind: ResolutionMaterialKind,
         val audience: String,
+        val fields: List<Field>,
+        val leaseKind: String? = null,
         val minimumSource: InterventionRequestSource = InterventionRequestSource.MODEL_HINT,
     )
 
     private val policies = mapOf(
-        "git.push" to Policy("git.push", "1", "1", AgentContinuationKind.RETRY_TOOL, ResolutionMaterialKind.DURABLE_REFERENCE, "git-adapter"),
-        "ssh.connect" to Policy("ssh.connect", "1", "1", AgentContinuationKind.VERIFY_THEN_RESUME, ResolutionMaterialKind.EPHEMERAL, "ssh-adapter"),
+        "git.push" to Policy(
+            "git.push", "1", "1", AgentContinuationKind.RETRY_TOOL,
+            ResolutionMaterialKind.DURABLE_REFERENCE, "git-adapter",
+            listOf(Field("authorization", "GitHub Token", FieldKind.AUTHORIZATION_SECRET)),
+            "ADAPTER_TARGET",
+        ),
+        "ssh.connect" to Policy(
+            "ssh.connect", "1", "1", AgentContinuationKind.VERIFY_THEN_RESUME,
+            ResolutionMaterialKind.EPHEMERAL, "ssh-adapter",
+            listOf(Field("password", "SSH 密码", FieldKind.SENSITIVE_TEXT)),
+            "SSH_CONNECTION",
+        ),
         "privilege.sudo.execute" to Policy(
             "privilege.sudo.execute",
             "1",
@@ -27,11 +47,27 @@ class AgentInterventionPolicyRegistry {
             AgentContinuationKind.CONTINUE_PTY,
             ResolutionMaterialKind.EPHEMERAL,
             "attested-privilege-adapter",
+            listOf(Field("password", "sudo 密码", FieldKind.SENSITIVE_TEXT)),
+            "PRIVILEGE_CHALLENGE",
             InterventionRequestSource.EXECUTOR_PROVEN,
         ),
-        "terminal.interaction" to Policy("terminal.interaction", "1", "1", AgentContinuationKind.CONTINUE_PTY, ResolutionMaterialKind.EPHEMERAL, "pty-adapter"),
-        "server.restart.confirm" to Policy("server.restart.confirm", "1", "1", AgentContinuationKind.VERIFY_THEN_RESUME, ResolutionMaterialKind.NONE, "acknowledgement-adapter"),
-        "skill.openai_api_access" to Policy("skill.openai_api_access", "1", "1", AgentContinuationKind.RESUME_AGENT_LOOP, ResolutionMaterialKind.DURABLE_REFERENCE, "skill-capability-proxy"),
+        "terminal.interaction" to Policy(
+            "terminal.interaction", "1", "1", AgentContinuationKind.CONTINUE_PTY,
+            ResolutionMaterialKind.EPHEMERAL, "pty-adapter",
+            listOf(Field("input", "终端输入", FieldKind.SENSITIVE_TEXT)),
+            "PTY",
+        ),
+        "server.restart.confirm" to Policy(
+            "server.restart.confirm", "1", "1", AgentContinuationKind.VERIFY_THEN_RESUME,
+            ResolutionMaterialKind.NONE, "acknowledgement-adapter",
+            listOf(Field("confirmed", "确认当前操作", FieldKind.CONFIRMATION)),
+        ),
+        "skill.openai_api_access" to Policy(
+            "skill.openai_api_access", "1", "1", AgentContinuationKind.RESUME_AGENT_LOOP,
+            ResolutionMaterialKind.DURABLE_REFERENCE, "skill-capability-proxy",
+            listOf(Field("authorization", "OpenAI API Key", FieldKind.AUTHORIZATION_SECRET)),
+            "ADAPTER_TARGET",
+        ),
     )
 
     fun resolve(capability: String): Policy? = policies[capability]

@@ -123,6 +123,57 @@ class AgentParallelToolExecutionTest {
     }
 
     @Test
+    fun `工具执行发送Pi生命周期且不携带参数和结果`() = runBlocking {
+        val sessionId = "tool-lifecycle"
+        seedSession(sessionId)
+        val lifecycle = mutableListOf<AgentLifecycleEvent>()
+        var turn = 0
+        val sensitiveArgument = "secret-tool-argument"
+        val sensitiveResult = "secret-tool-result"
+        val loop = AgentLoop(
+            runStore = store,
+            lifecycleSink = { lifecycle += it },
+            toolRuntime = AgentToolRuntime(
+                executorProvider = {
+                    { _, _, _, _, updateStatus ->
+                        updateStatus("working")
+                        AppToolExecutionResult(JsonPrimitive(sensitiveResult))
+                    }
+                },
+                approvalProvider = { null },
+            ),
+            modelTransport = ModelTurnTransport {
+                turn++
+                if (turn == 1) {
+                    flowOf(
+                        AppStreamEvent.ToolCall(
+                            id = "tool-lifecycle-call",
+                            name = "tool-one",
+                            argumentsObj = buildJsonObject { put("value", sensitiveArgument) },
+                        ),
+                        AppStreamEvent.Finish("tool_calls"),
+                    )
+                } else {
+                    flowOf(AppStreamEvent.Content("done"), AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+
+        loop.run(loopRequest(sessionId)).toList()
+
+        val toolEvents = lifecycle.filter { it.toolCallId == "tool-lifecycle-call" }
+        assertEquals(
+            listOf(
+                AgentLifecyclePhase.TOOL_EXECUTION_START,
+                AgentLifecyclePhase.TOOL_EXECUTION_UPDATE,
+                AgentLifecyclePhase.TOOL_EXECUTION_END,
+            ),
+            toolEvents.map(AgentLifecycleEvent::phase),
+        )
+        assertTrue(toolEvents.none { sensitiveArgument in it.toString() || sensitiveResult in it.toString() })
+    }
+
+    @Test
     fun `工具返回ok false时模型收到失败结果`() = runBlocking {
         val runtime = AgentToolRuntime(
             executorProvider = {
