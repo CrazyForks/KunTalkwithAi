@@ -156,7 +156,7 @@ interface AgentDao {
 
     @Query("""
         UPDATE agent_suspensions SET status = :nextStatus, failureCode = :failureCode,
-            rowVersion = rowVersion + 1, updatedAt = :updatedAt
+            rowVersion = rowVersion + 1, updatedAt = :updatedAt, resolutionNonceHash = NULL
         WHERE id = :id AND status = :expectedStatus AND rowVersion = :expectedVersion
           AND EXISTS (
               SELECT 1 FROM agent_runs WHERE agent_runs.id = agent_suspensions.runId
@@ -173,9 +173,27 @@ interface AgentDao {
         updatedAt: Long,
     ): Int
 
+    /**
+     * Adapter 已经开始外部动作后，即使 Run 同时终止也必须记录对账事实。
+     * 此 CAS 只允许 Broker 的 fulfillment/reconcile 路径使用，不能据此恢复 Run。
+     */
+    @Query("""
+        UPDATE agent_suspensions SET status = :nextStatus, failureCode = :failureCode,
+            rowVersion = rowVersion + 1, updatedAt = :updatedAt, resolutionNonceHash = NULL
+        WHERE id = :id AND status = :expectedStatus AND rowVersion = :expectedVersion
+    """)
+    suspend fun recordSuspensionDeliveryFact(
+        id: String,
+        expectedStatus: String,
+        nextStatus: String,
+        expectedVersion: Long,
+        failureCode: String?,
+        updatedAt: Long,
+    ): Int
+
     @Query("""
         UPDATE agent_suspensions SET status = 'RESOLUTION_RECEIVED', rowVersion = rowVersion + 1,
-            updatedAt = :updatedAt
+            updatedAt = :updatedAt, resolutionReference = :resolutionReference
         WHERE id = :id AND status = :expectedStatus AND rowVersion = :expectedVersion
           AND resolutionNonceHash = :resolutionNonceHash
           AND EXISTS (
@@ -189,8 +207,37 @@ interface AgentDao {
         expectedStatus: String,
         expectedVersion: Long,
         resolutionNonceHash: String,
+        resolutionReference: String?,
         updatedAt: Long,
     ): Int
+
+    @Query("SELECT * FROM agent_capability_grants WHERE grantId = :grantId LIMIT 1")
+    suspend fun getCapabilityGrant(grantId: String): AgentCapabilityGrantEntity?
+
+    /** Grant ID 不需要离开可信 Store；执行器只按完整 audience 和目标绑定查找候选。 */
+    @Query(
+        """
+        SELECT * FROM agent_capability_grants
+        WHERE capability = :capability AND runId = :runId AND runGeneration = :runGeneration
+          AND toolCallId = :toolCallId AND executionSlot = :executionSlot
+          AND operation = :operation AND targetBinding = :targetBinding
+          AND audience = :audience AND generation = :generation
+          AND status = 'AVAILABLE' AND revoked = 0 AND usageCount < maxUses AND expiresAt > :now
+        ORDER BY issuedAt DESC LIMIT 1
+        """,
+    )
+    suspend fun findAvailableCapabilityGrant(
+        capability: String,
+        runId: String,
+        runGeneration: Long,
+        toolCallId: String,
+        executionSlot: String,
+        operation: String,
+        targetBinding: String,
+        audience: String,
+        generation: Long,
+        now: Long,
+    ): AgentCapabilityGrantEntity?
 
     @Query("""
         UPDATE agent_suspensions SET requestSource = :requestSource,
@@ -208,7 +255,7 @@ interface AgentDao {
 
     @Query("""
         UPDATE agent_suspensions SET status = 'FULFILLING', fulfillmentAttemptId = :attemptId,
-            rowVersion = rowVersion + 1, updatedAt = :updatedAt
+            rowVersion = rowVersion + 1, updatedAt = :updatedAt, resolutionNonceHash = NULL
         WHERE id = :id AND status = 'RESOLUTION_RECEIVED' AND rowVersion = :expectedVersion
           AND runGeneration = :runGeneration
           AND EXISTS (
@@ -228,7 +275,7 @@ interface AgentDao {
     @Query("""
         UPDATE agent_suspensions SET status = 'RESUMING', resumeAttemptId = :attemptId,
             rowVersion = rowVersion + 1, updatedAt = :updatedAt
-        WHERE id = :id AND status = 'READY_TO_RESUME' AND rowVersion = :expectedVersion
+        WHERE id = :id AND status = :expectedStatus AND rowVersion = :expectedVersion
           AND runGeneration = :runGeneration
           AND EXISTS (
               SELECT 1 FROM agent_runs WHERE agent_runs.id = agent_suspensions.runId
@@ -238,14 +285,88 @@ interface AgentDao {
     """)
     suspend fun claimSuspensionResume(
         id: String,
+        expectedStatus: String,
         expectedVersion: Long,
         runGeneration: Long,
         attemptId: String,
         updatedAt: Long,
     ): Int
 
+    /** Resume claim 与 slot 投影必须同事务提交，内存 wake-up 允许丢失。 */
+    @Transaction
+    suspend fun claimSuspensionResumeAndSlot(
+        id: String,
+        expectedStatus: String,
+        expectedVersion: Long,
+        runGeneration: Long,
+        attemptId: String,
+        updatedAt: Long,
+    ): Boolean {
+        val suspension = getSuspension(id) ?: return false
+        val slot = getExecutionSlot(suspension.runId, suspension.executionSlot) ?: return false
+        if (claimSuspensionResume(id, expectedStatus, expectedVersion, runGeneration, attemptId, updatedAt) != 1) {
+            return false
+        }
+        upsertExecutionSlot(slot.copy(state = "RESUMING", updatedAt = updatedAt))
+        return true
+    }
+
+    /** ToolResult 已持久化后提交 Suspension 与 slot 的最终投影。 */
+    @Transaction
+    suspend fun finishSuspensionResume(
+        id: String,
+        expectedVersion: Long,
+        updatedAt: Long,
+    ): Boolean {
+        val suspension = getSuspension(id) ?: return false
+        val slot = getExecutionSlot(suspension.runId, suspension.executionSlot) ?: return false
+        if (compareAndSetSuspension(id, "RESUMING", "RESUMED", expectedVersion, updatedAt) != 1) return false
+        upsertExecutionSlot(slot.copy(state = "COMPLETED", updatedAt = updatedAt))
+        return true
+    }
+
     @Query("UPDATE agent_capability_grants SET revoked = 1, status = 'REVOKED', rowVersion = rowVersion + 1 WHERE runId = :runId AND revoked = 0")
     suspend fun revokeGrantsForRun(runId: String): Int
+
+    /** Run 终止时封存尚未进入外部履行的 Suspension，防止旧接力卡片继续出现。 */
+    @Query(
+        """
+        UPDATE agent_suspensions
+        SET status = 'CANCELLED', failureCode = :reason,
+            resolutionNonceHash = NULL, rowVersion = rowVersion + 1,
+            updatedAt = :updatedAt
+        WHERE runId = :runId
+          AND status IN (
+              'WAITING_USER', 'WAITING_USER_REENTRY', 'RESOLUTION_RECEIVED',
+              'DELIVERED', 'READY_TO_RESUME', 'READY_TO_RESUME_WITH_FAILURE',
+              'RESUMING', 'RESUMED'
+          )
+        """,
+    )
+    suspend fun cancelPendingSuspensionsForRun(runId: String, reason: String, updatedAt: Long): Int
+
+    /** Suspension 取消后同步封存对应槽位，避免 Projection 留在 SUSPENDED/RESUMING。 */
+    @Query(
+        """
+        UPDATE agent_execution_slots
+        SET state = 'FAILED', updatedAt = :updatedAt
+        WHERE runId = :runId
+          AND state IN ('SUSPENDED', 'RESUMING')
+          AND suspensionId IN (
+              SELECT id FROM agent_suspensions
+              WHERE runId = :runId AND status = 'CANCELLED' AND failureCode = :reason
+          )
+        """,
+    )
+    suspend fun failSlotsForCancelledSuspensions(runId: String, reason: String, updatedAt: Long): Int
+
+    /** Run 终止、Suspension 和 Slot 投影必须一起提交。 */
+    @Transaction
+    suspend fun cancelPendingSuspensionsAndSlots(runId: String, reason: String, updatedAt: Long): Int {
+        val changed = cancelPendingSuspensionsForRun(runId, reason, updatedAt)
+        if (changed > 0) failSlotsForCancelledSuspensions(runId, reason, updatedAt)
+        return changed
+    }
 
     @Query("UPDATE agent_resource_leases SET revoked = 1 WHERE runId = :runId AND revoked = 0")
     suspend fun revokeResourceLeasesForRun(runId: String): Int
@@ -309,6 +430,32 @@ interface AgentDao {
         expiresAt: Long,
     ): Long
 
+    /** 同一 Suspension 在进程恢复后可以幂等续租；owner、generation 或 Run 不同都不能穿透。 */
+    @Query(
+        """
+        UPDATE agent_resource_leases SET expiresAt = :expiresAt
+        WHERE resourceRef = :resourceRef AND leaseKind = :leaseKind
+          AND leaseOwner = :leaseOwner AND leaseGeneration = :leaseGeneration
+          AND runId = :runId AND runGeneration = :runGeneration
+          AND revoked = 0 AND expiresAt > :issuedAt
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE id = :runId
+                AND runGeneration = :runGeneration
+                AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+          )
+        """,
+    )
+    suspend fun renewOwnedResourceLease(
+        resourceRef: String,
+        leaseOwner: String,
+        leaseKind: String,
+        leaseGeneration: Long,
+        runId: String,
+        runGeneration: Long,
+        issuedAt: Long,
+        expiresAt: Long,
+    ): Int
+
     /** 只有已撤销或已过期的旧 Lease 才能被更高 generation 接管。 */
     @Query(
         """
@@ -349,6 +496,17 @@ interface AgentDao {
         issuedAt: Long,
         expiresAt: Long,
     ): Boolean {
+        if (renewOwnedResourceLease(
+                resourceRef,
+                leaseOwner,
+                leaseKind,
+                leaseGeneration,
+                runId,
+                runGeneration,
+                issuedAt,
+                expiresAt,
+            ) == 1
+        ) return true
         if (
             replaceReclaimableResourceLease(
                 resourceRef,

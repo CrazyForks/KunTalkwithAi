@@ -320,7 +320,7 @@ interface ComputerDao {
         conversationId: String,
     ): List<ComputerExecutionEntity>
 
-    /** 停止按钮使用该查询，取消指定 AgentRun 下创建的全部前台与后台 VPS 任务。 */
+    /** 返回指定 Run 的停止候选；Composer 在执行器中排除 RETURN_HANDLE，不能扩大到会话。 */
     @Query(
         """
         SELECT * FROM computer_executions
@@ -329,6 +329,9 @@ interface ComputerDao {
           AND (
                 remoteStatus IN ('STARTING', 'RUNNING')
                 OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
+                OR (remoteStatus = 'UNKNOWN' AND status = 'UNKNOWN' AND errorCode IN (
+                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_CANCEL_REQUESTED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
+                ))
               )
         ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
         """,
@@ -367,6 +370,9 @@ interface ComputerDao {
           AND (
                 remoteStatus IN ('STARTING', 'RUNNING')
                 OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
+                OR (remoteStatus = 'UNKNOWN' AND status = 'UNKNOWN' AND errorCode IN (
+                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_CANCEL_REQUESTED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
+                ))
           )
         """,
     )
@@ -559,8 +565,18 @@ interface ComputerDao {
     @Query("SELECT * FROM computer_executions WHERE status = 'UNKNOWN' ORDER BY finishedAt ASC")
     suspend fun getUnknownExecutions(): List<ComputerExecutionEntity>
 
+    /** 启动确认/结果返回可能持有旧快照，不能把停止按钮刚登记的取消意图覆盖为 null。 */
+    @Transaction
+    suspend fun upsertExecution(execution: ComputerExecutionEntity) {
+        val existing = getExecutionById(execution.id)
+        upsertExecutionRow(execution.copy(
+            cancelRequestedAt = existing?.cancelRequestedAt ?: execution.cancelRequestedAt,
+            cancelCompletedAt = existing?.cancelCompletedAt ?: execution.cancelCompletedAt,
+        ))
+    }
+
     @Upsert
-    suspend fun upsertExecution(execution: ComputerExecutionEntity)
+    suspend fun upsertExecutionRow(execution: ComputerExecutionEntity)
 
     @Query("DELETE FROM computer_executions WHERE id = :executionId AND status = 'UNKNOWN'")
     suspend fun deleteExecution(executionId: String)

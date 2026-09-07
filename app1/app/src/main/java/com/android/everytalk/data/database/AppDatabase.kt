@@ -88,7 +88,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentStoredAuthorizationEntity::class,
         AgentOAuthStateEntity::class,
     ],
-    version = 32,
+    version = 33,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -147,6 +147,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_29_30,
                     MIGRATION_30_31,
                     MIGRATION_31_32,
+                    MIGRATION_32_33,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()
@@ -1192,6 +1193,15 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_31_32 = object : Migration(31, 32) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE agent_steering_messages ADD COLUMN payloadJson TEXT")
+            }
+        }
+
+        /** 持久化的只有安全存储引用；一次性密码、OTP 等明文仍只存在短期内存。 */
+        val MIGRATION_32_33 = object : Migration(32, 33) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE agent_suspensions ADD COLUMN reasonSafe TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE agent_suspensions ADD COLUMN userVisibleContext TEXT")
+                db.execSQL("ALTER TABLE agent_suspensions ADD COLUMN resolutionReference TEXT")
             }
         }
 

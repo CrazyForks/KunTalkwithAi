@@ -35,6 +35,42 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 32 to 33 only adds non-secret resolution reference`() {
+        val createHelper = openHelper(
+            version = 32,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE agent_suspensions (id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL)")
+                db.execSQL("INSERT INTO agent_suspensions VALUES ('suspension-1', 'WAITING_USER')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 33,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(32, oldVersion)
+                assertEquals(33, newVersion)
+                AppDatabase.MIGRATION_32_33.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        val suspensionColumns = columns(db, "agent_suspensions")
+        assertTrue(suspensionColumns.contains("reasonSafe"))
+        assertTrue(suspensionColumns.contains("userVisibleContext"))
+        assertTrue(suspensionColumns.contains("resolutionReference"))
+        db.query("SELECT status, reasonSafe, userVisibleContext, resolutionReference FROM agent_suspensions WHERE id = 'suspension-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("WAITING_USER", cursor.getString(0))
+            assertEquals("", cursor.getString(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
     fun `migration 31 to 32 adds structured steering payload without changing legacy rows`() {
         val createHelper = openHelper(
             version = 31,

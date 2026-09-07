@@ -25,6 +25,8 @@ data class AgentSuspensionEntity(
     val executionSlot: String,
     val requestHash: String,
     val capabilityId: String,
+    val reasonSafe: String,
+    val userVisibleContext: String? = null,
     val targetBindingRef: String,
     val requestSource: String,
     val policyVersion: String,
@@ -38,6 +40,8 @@ data class AgentSuspensionEntity(
     val continuationKind: String,
     val reconciliationPhase: String? = null,
     val resolutionNonceHash: String? = null,
+    /** 只允许保存 Secure Store / StoredAuthorization 的非敏感引用，禁止保存 Secret 正文。 */
+    val resolutionReference: String? = null,
     val fulfillmentAttemptId: String? = null,
     val resumeAttemptId: String? = null,
     val rowVersion: Long = 0,
