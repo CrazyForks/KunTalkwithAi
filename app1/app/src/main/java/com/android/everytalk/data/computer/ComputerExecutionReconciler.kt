@@ -82,6 +82,10 @@ internal fun ComputerExecutionEntity.shouldReconcileRemote(): Boolean {
             retryableUnknown)
 }
 
+/** 仅重试用户已经对该 Execution 登记的停止意图；本地协程取消或网络中断都不算授权。 */
+internal fun ComputerExecutionEntity.shouldRetryRemoteCancellation(): Boolean =
+    cancelRequestedAt != null && shouldReconcileRemote()
+
 /**
  * 将 VPS 的状态事实对账回 Room。
  *

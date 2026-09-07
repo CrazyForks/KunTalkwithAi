@@ -65,22 +65,25 @@ class ComputerToolExecutor(
     }
 
     /**
-     * 停止当前会话或指定 Run 的全部受管远端任务（包含前台与后台 RETURN_HANDLE 任务）。
-     * 任务归属从 Workspace 反查或直接按 runId 查，先写取消意图再发 SSH 取消。
+     * Composer 停止只收尾指定 Run 中仍等待结果的命令，不停止已经交付的后台服务。
+     * 未指定 Run 的 Workspace 删除流程保留原来的全量停止语义；两者不能互相回退。
      */
     suspend fun cancelActiveExecutions(conversationId: String, runId: String? = null): Boolean {
         val executions = if (!runId.isNullOrBlank()) {
-            val byRun = repository.dao().getCancellableRemoteExecutionsForRun(runId)
-            if (byRun.isNotEmpty()) byRun else repository.dao().getCancellableRemoteExecutionsForConversation(conversationId)
+            // 明确指定 Run 就只取消它，空结果不代表可以扩大到整个会话。
+            repository.dao().getCancellableRemoteExecutionsForRun(runId)
         } else {
             if (conversationId.isBlank()) return true
             repository.dao().getCancellableRemoteExecutionsForConversation(conversationId)
         }
         var allSucceeded = true
         for (execution in executions) {
+            if (!runId.isNullOrBlank() &&
+                execution.completionMode == ComputerExecutionCompletionMode.RETURN_HANDLE.name
+            ) continue
             try {
-                // 先落库取消意图，再进入 SSH。停止按钮随后取消本地 Agent 协程时，
-                // 恢复扫描仍能识别这条远端任务需要继续确认，避免竞态窗口永久丢失。
+                // 先落库取消意图再进入 SSH；本地 Agent 的取消独立进行，
+                // 断网后恢复扫描仍能识别这条远端任务需要补发停止请求。
                 repository.dao().markRemoteExecutionCancellationRequested(execution.id)
                 // 本地记录还在但服务器/Workspace 已被删除时，返回 null 不能向用户报告“已取消”。
                 val snapshot = repository.cancelRemoteExecution(execution.id)
@@ -102,7 +105,8 @@ class ComputerToolExecutor(
                     "取消远端 Execution 失败 execution=${execution.id}: ${error.message}",
                 )
                 val observedAt = System.currentTimeMillis()
-                val errorCode = (error as? ComputerException)?.code
+                // 网络错误统一保持可重试取消状态，身份/权限错误则保留原码并停止自动重试。
+                val errorCode = (error as? ComputerException)?.takeUnless { it.retryable }?.code
                     ?: ComputerErrorCodes.EXECUTION_CANCEL_FAILED
                 repository.dao().markRemoteExecutionUnknown(
                     executionId = execution.id,

@@ -6,8 +6,7 @@ import java.nio.CharBuffer
 import java.security.MessageDigest
 import java.util.EnumSet
 
-internal const val COMPUTER_BOOTSTRAP_VERSION = "9"
-private const val COMPUTER_RUNTIME_ONLY_UPGRADE_FROM_VERSION = "8"
+internal const val COMPUTER_BOOTSTRAP_VERSION = "10"
 private const val SANDBOX_IMAGE = "everytalk-sandbox:1"
 private const val BOOTSTRAP_COMMAND_TIMEOUT_MILLIS = 20 * 60 * 1000L
 private const val BOOTSTRAP_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -18,10 +17,10 @@ internal fun Computer.needsContainerRuntimeUpgrade(): Boolean =
         bootstrapVersion != null &&
         bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION
 
-/** v8 已有完整 Docker 环境，v9 只需替换 Helper 和 Wrapper。 */
+/** v8/v9 已有完整 Docker 环境；升级只替换 Helper 和 Wrapper，不重建容器或镜像。 */
 internal fun Computer.canUseRuntimeOnlyUpgrade(): Boolean =
     needsContainerRuntimeUpgrade() &&
-        bootstrapVersion == COMPUTER_RUNTIME_ONLY_UPGRADE_FROM_VERSION &&
+        bootstrapVersion in setOf("8", "9") &&
         capabilities?.dockerAvailable == true
 
 /** APK 可能由 Windows 工作区构建，上传 VPS 前统一把 CRLF/CR 转成 POSIX Shell 需要的 LF。 */

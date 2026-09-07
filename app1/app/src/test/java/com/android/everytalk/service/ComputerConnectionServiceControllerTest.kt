@@ -64,6 +64,19 @@ class ComputerConnectionServiceControllerTest {
         assertEquals(emptyList<String?>(), context.foregroundStartActions)
     }
 
+    @Test
+    fun `前台服务启动失败不能残留运行令牌`() {
+        val context = object : ContextWrapper(ApplicationProvider.getApplicationContext()) {
+            override fun getApplicationContext(): Context = this
+            override fun startForegroundService(service: Intent): ComponentName {
+                throw IllegalStateException("foreground start denied")
+            }
+        }
+        val result = runCatching { ComputerConnectionServiceController.acquireAgentRun(context) }
+        org.junit.Assert.assertTrue(result.isFailure)
+        assertEquals(0, ComputerConnectionServiceController.activeAgentRunCount())
+    }
+
     /** 只记录服务调度方式，不创建真实 Android Service。 */
     private class RecordingServiceContext(base: Context) : ContextWrapper(base) {
         val foregroundStartActions = mutableListOf<String?>()

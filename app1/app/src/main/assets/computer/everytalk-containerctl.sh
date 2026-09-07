@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION="9"
+VERSION="10"
 HELPER_PATH="/usr/local/libexec/everytalk-containerctl"
 RUNTIME_WRAPPER_PATH="/usr/local/libexec/everytalk-runtime-wrapper"
 RUNTIME_WRAPPER_VERSION_PATH="/usr/local/libexec/everytalk-runtime-wrapper.sha256"
@@ -175,16 +175,10 @@ ensure_workspace() {
         name="$(require_workspace_container "$workspace_id")"
         # 迁移旧版本创建的 Container，确保 VPS 重启后不会自动拉起历史会话。
         docker update --restart=no "$name" >/dev/null
-        mounted_wrapper_hash="$(docker inspect -f '{{index .Config.Labels "com.everytalk.wrapper"}}' "$name")"
-        if [ "$mounted_wrapper_hash" != "$runtime_hash" ]; then
-            # 旧 Container 没有当前哈希标签时按需重建，Host Workspace 继续原路径挂载。
-            stop_workspace_backgrounds "$workspace_id" "$name"
-            docker rm --force "$name" >/dev/null
-        else
-            docker start "$name" >/dev/null
-            printf 'container=%s\n' "$name"
-            return
-        fi
+        # Wrapper 更新不能删除容器。新脚本按版本安装，旧脚本和已有服务保持不变。
+        docker start "$name" >/dev/null
+        printf 'container=%s\n' "$name"
+        return
     fi
 
     # 明确不传 CPU、内存、磁盘、swap 或 PID 配额参数。
@@ -208,6 +202,31 @@ ensure_workspace() {
 container_address() {
     name="$(require_workspace_container "${1:-}")"
     docker inspect -f "{{with index .NetworkSettings.Networks \"$NETWORK\"}}{{.IPAddress}}{{end}}" "$name"
+}
+
+# 只安装一个版本化脚本，不替换运行中的旧脚本、不重启容器。
+# 固定 root 所有目录和摘要校验确保不会执行 Workspace 中的同名文件。
+container_runtime() {
+    runtime_hash="$(runtime_wrapper_hash)"
+    container_wrapper="/usr/local/bin/everytalk-runtime-wrapper-$runtime_hash"
+    if ! docker exec --user 0:0 "$name" /bin/sh -c '
+        [ -f "$1" ] && [ ! -L "$1" ] && [ -x "$1" ] &&
+        [ "$(stat -c %u "$1")" = 0 ] &&
+        [ "$(sha256sum "$1" | cut -d " " -f1)" = "$2" ]
+    ' sh "$container_wrapper" "$runtime_hash"; then
+        docker exec -i --user 0:0 "$name" /bin/sh -c '
+            set -eu
+            umask 077
+            [ "$(realpath -e /usr/local/bin)" = /usr/local/bin ] || exit 46
+            temporary="$(mktemp /usr/local/bin/.everytalk-runtime.XXXXXX)"
+            trap '\''rm -f -- "$temporary"'\'' EXIT HUP INT TERM
+            cat > "$temporary"
+            [ "$(sha256sum "$temporary" | cut -d " " -f1)" = "$2" ] || exit 46
+            chmod 755 "$temporary"
+            mv -f -- "$temporary" "$1"
+        ' sh "$container_wrapper" "$runtime_hash" < "$RUNTIME_WRAPPER_PATH-$runtime_hash" || return 1
+    fi
+    printf '%s\n' "$container_wrapper"
 }
 
 run_workspace() {
@@ -307,8 +326,9 @@ run_workspace_execution() {
     user_arguments=""
     [ "$root_mode" = true ] && user_arguments="--user 0:0"
     # Wrapper 负责读取 Envelope、创建状态文件并脱离当前 SSH Channel 执行。
+    current_wrapper="$(container_runtime)" || return 1
     docker exec -i -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" $user_arguments "$name" \
-        /usr/local/bin/everytalk-runtime-wrapper "$runtime" "$execution" --envelope-v2 "$timeout_seconds" "$request_hash"
+        "$current_wrapper" "$runtime" "$execution" --envelope-v2 "$timeout_seconds" "$request_hash"
 }
 
 execution_status() {
@@ -321,7 +341,8 @@ execution_status() {
     name="$(require_workspace_container "$workspace_id")"
     owner_uids="$(container_allowed_owner_uids "$name")"
     execution_dir="/workspace/.everytalk/executions/$execution_id"
-    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+    current_wrapper="$(container_runtime)" || return 1
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" "$current_wrapper" \
         "$execution_dir" '' --execution-status 0 "$request_hash"
 }
 
@@ -342,7 +363,8 @@ execution_result() {
     name="$(require_workspace_container "$workspace_id")"
     owner_uids="$(container_allowed_owner_uids "$name")"
     execution_dir="/workspace/.everytalk/executions/$execution_id"
-    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+    current_wrapper="$(container_runtime)" || return 1
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" "$current_wrapper" \
         "$execution_dir" '' --execution-result "$stdout_offset" "$stderr_offset" "$max_bytes" "$request_hash"
 }
 
@@ -363,7 +385,8 @@ watch_exec_helper() {
     name="$(require_workspace_container "$workspace_id")"
     owner_uids="$(container_allowed_owner_uids "$name")"
     execution_dir="/workspace/.everytalk/executions/$execution_id"
-    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+    current_wrapper="$(container_runtime)" || return 1
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" "$current_wrapper" \
         "$execution_dir" '' --watch-execution "$stdout_cursor" "$stderr_cursor" "$max_bytes" "$request_hash"
 }
 
@@ -413,7 +436,8 @@ cancel_execution() {
     name="$(require_workspace_container "$workspace_id")"
     owner_uids="$(container_allowed_owner_uids "$name")"
     execution_dir="/workspace/.everytalk/executions/$execution_id"
-    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+    current_wrapper="$(container_runtime)" || return 1
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" "$current_wrapper" \
         "$execution_dir" '' --execution-cancel 0 "$request_hash"
 }
 

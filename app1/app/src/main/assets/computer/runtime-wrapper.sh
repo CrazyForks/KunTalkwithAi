@@ -98,7 +98,9 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
     esac
 
     valid_execution_id() {
-        case "${1:-}" in execution_[A-Za-z0-9_-]*) return 0 ;; *) return 1 ;; esac
+        # * 在 shell 模式里可匹配任意字符，必须额外拒绝路径分隔符和其他非法字符。
+        case "${1:-}" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+        case "$1" in execution_?*) return 0 ;; *) return 1 ;; esac
     }
     valid_decimal() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; }
     state_value() { awk -F= -v key="$2" '$1 == key { print substr($0, length(key) + 2); exit }' "$1"; }
@@ -147,27 +149,6 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             [ "$process_owner" = "$allowed_owner" ] && return 0
         done
         return 1
-    }
-    process_group_owner_allowed() {
-        process_group="$1"
-        group_found=false
-        for process_stat in /proc/[0-9]*/stat; do
-            [ -r "$process_stat" ] || continue
-            process_line="$(cat "$process_stat" 2>/dev/null || true)"
-            process_rest="${process_line##*) }"
-            actual_group="$(printf '%s\n' "$process_rest" | awk '{print $3}')"
-            [ "$actual_group" = "$process_group" ] || continue
-            group_found=true
-            process_status="${process_stat%/stat}/status"
-            process_owner="$(awk '/^Uid:/{print $2; exit}' "$process_status" 2>/dev/null || true)"
-            case "$process_owner" in ''|*[!0-9]*) return 1 ;; esac
-            owner_allowed=false
-            for allowed_owner in ${EVERYTALK_ALLOWED_OWNER_UIDS:-$(id -u)}; do
-                [ "$process_owner" = "$allowed_owner" ] && owner_allowed=true && break
-            done
-            [ "$owner_allowed" = true ] || return 1
-        done
-        [ "$group_found" = true ]
     }
     reject_untrusted_state() {
         # 不可信状态不能伪造成全 0 request_hash。全 0 会被 Android 误判成另一条请求，
@@ -292,20 +273,192 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
                         "$(state_value "$state_file" start_ticks)" "$(state_value "$state_file" started_at)" "$termination_reason"
                 fi
             fi
-            cat "$state_file"
+            # 兼容仍在运行的旧 Wrapper：它可能提前写 CANCELLED，但取消端尚未确认子进程退出。
+            # 对外仅发布 UNKNOWN，直到本次 cancel 的完整收尾标记落盘。
+            if [ -e "$execution_dir/cancel.members" ] && ! cancel_is_complete; then
+                awk -F= '$1 == "status" { print "status=UNKNOWN"; next }
+                    $1 == "exit_code" { print "exit_code="; next } { print }' "$state_file"
+            else
+                cat "$state_file"
+            fi
         else
             reject_untrusted_state '状态文件缺失或为符号链接'
         fi
     }
     cleanup_v2_runtime() {
         rm -f -- "$environment_file" "$stdin_file" "$working_directory_file" "$command_file"
+        rm -f -- "$runtime_dir/execution.id"
         rmdir "$runtime_dir" 2>/dev/null || true
+    }
+
+    cancel_is_complete() {
+        state_owner_allowed "$execution_dir/cancel.complete" &&
+            [ "$(cat "$execution_dir/cancel.complete")" = "$request_hash" ]
+    }
+
+    # 只枚举这次 setsid 启动的会话，不跨到其他 Execution、systemd 服务或自行脱离的守护进程。
+    # timeout 可以创建新的进程组，但仍属于同一会话，因此不能只 kill 原进程组。
+    # 每个成员记录 PID + start_ticks，发信号前再次验证，拒绝接管复用的 PID。
+    read_cancel_process() {
+        cancel_process_pid="$1"
+        cancel_process_line=''
+        IFS= read -r cancel_process_line 2>/dev/null < "/proc/$cancel_process_pid/stat" || return 1
+        cancel_process_rest="${cancel_process_line##*) }"
+        set -- $cancel_process_rest
+        [ "$#" -ge 20 ] || return 1
+        cancel_process_state="$1"
+        cancel_process_session="$4"
+        shift 19
+        cancel_process_ticks="$1"
+        # 僵尸已经释放命令的内存和文件描述符，只能由其父进程回收，不能再发信号。
+        [ "$cancel_process_state" != Z ] && [ "$cancel_process_state" != X ]
+    }
+    cancel_member_matches() {
+        valid_decimal "$1" && [ "$1" -gt 1 ] && valid_decimal "$2" || return 1
+        cancel_expected_ticks="$2"
+        read_cancel_process "$1" &&
+            [ "$cancel_process_session" = "$cancel_session" ] &&
+            [ "$cancel_process_ticks" = "$cancel_expected_ticks" ] &&
+            path_owner_allowed "/proc/$cancel_process_pid"
+    }
+    collect_cancel_members() {
+        for cancel_stat in /proc/[0-9]*/stat; do
+            cancel_pid="${cancel_stat%/stat}"
+            cancel_pid="${cancel_pid##*/}"
+            read_cancel_process "$cancel_pid" || continue
+            [ "$cancel_process_session" = "$cancel_session" ] || continue
+            [ "$cancel_process_ticks" -ge "$cancel_start_ticks" ] || return 1
+            path_owner_allowed "/proc/$cancel_pid" || return 1
+            printf '%s %s\n' "$cancel_pid" "$cancel_process_ticks"
+        done
+    }
+    cancel_has_anchor() {
+        while read -r cancel_pid cancel_ticks; do
+            cancel_member_matches "$cancel_pid" "$cancel_ticks" && return 0
+        done < "$execution_dir/cancel.members"
+        return 1
+    }
+    save_cancel_members() {
+        cancel_members_tmp="$(mktemp "$execution_dir/cancel-members.XXXXXX")" || return 1
+        printf '%s\n' "$cancel_members" > "$cancel_members_tmp"
+        mv -f -- "$cancel_members_tmp" "$execution_dir/cancel.members"
+    }
+    signal_cancel_members() {
+        cancel_signal="$1"
+        while read -r cancel_pid cancel_ticks; do
+            # 不使用负 PID 的组杀，也不以进程名匹配；进程在验证期间消失属于正常退出。
+            if cancel_member_matches "$cancel_pid" "$cancel_ticks"; then
+                kill "-$cancel_signal" "$cancel_pid" 2>/dev/null || true
+            fi
+        done < "$execution_dir/cancel.members"
+    }
+    cleanup_cancelled_execution() {
+        # SIGKILL 无法执行 trap。新任务将 runtime ID 单独留在其 Execution 目录，
+        # 取消端只删除该目录映射下的四个临时输入文件，绝不递归删除 Workspace。
+        if state_owner_allowed "$execution_dir/runtime.id"; then
+            cancel_runtime_id="$(cat "$execution_dir/runtime.id")"
+            case "$cancel_runtime_id" in
+                run_*) ;;
+                *) return 1 ;;
+            esac
+            case "$cancel_runtime_id" in *[!A-Za-z0-9_-]*) return 1 ;; esac
+            if [ "$v2_host" = true ]; then
+                cancel_runtime="$HOME/.everytalk/host-runtime/$cancel_runtime_id"
+            else
+                cancel_runtime="$v2_workspace/.everytalk/runtime/$cancel_runtime_id"
+            fi
+            if [ -e "$cancel_runtime" ] || [ -L "$cancel_runtime" ]; then
+                [ -d "$cancel_runtime" ] && [ ! -L "$cancel_runtime" ] &&
+                    [ "$(realpath -e -- "$cancel_runtime")" = "$cancel_runtime" ] &&
+                    path_owner_allowed "$cancel_runtime" || return 1
+                # 反向校验防止损坏的 runtime.id 指向另一个命令的临时目录。
+                state_owner_allowed "$cancel_runtime/execution.id" &&
+                    [ "$(cat "$cancel_runtime/execution.id")" = "$execution_id" ] || return 1
+                rm -f -- "$cancel_runtime/environment.sh" "$cancel_runtime/stdin" \
+                    "$cancel_runtime/cwd" "$cancel_runtime/command.sh" "$cancel_runtime/execution.id"
+                rmdir -- "$cancel_runtime" 2>/dev/null || true
+            fi
+        fi
+        # 仅已确认停止的本次命令日志保留前 256 KiB，原地截断不产生额外大副本。
+        # 项目文件和其他任务日志一律不碰；链接文件拒绝处理，防止伤及链接目标。
+        for cancel_log in "$stdout_log" "$stderr_log"; do
+            state_owner_allowed "$cancel_log" && [ "$(stat -c '%h' -- "$cancel_log")" = 1 ] || continue
+            if [ "$(stat -c '%s' -- "$cancel_log")" -gt 262144 ]; then
+                truncate -s 262144 -- "$cancel_log" || return 1
+            fi
+        done
+    }
+    cancel_managed_execution() {
+        # SSH 重试与按钮请求可能重叠；锁仅覆盖这个 Execution，关闭 channel 后自动释放。
+        if [ -e "$execution_dir/cancel.lock" ] || [ -L "$execution_dir/cancel.lock" ]; then
+            state_owner_allowed "$execution_dir/cancel.lock" &&
+                [ "$(stat -c '%h' -- "$execution_dir/cancel.lock")" = 1 ] || return 1
+        fi
+        exec 9> "$execution_dir/cancel.lock"
+        # 锁忙时不覆盖另一个取消请求正在发布的状态，交给 Android 稍后重试。
+        flock -n 9 || exit 75
+        cancel_is_complete && return 0
+        cancel_session="$(state_value "$state_file" pid)"
+        cancel_start_ticks="$(state_value "$state_file" start_ticks)"
+        valid_decimal "$cancel_session" && [ "$cancel_session" -gt 1 ] &&
+            valid_decimal "$cancel_start_ticks" || return 1
+        [ "$(state_value "$state_file" boot_id)" = "$(cat /proc/sys/kernel/random/boot_id)" ] || return 1
+        if [ -e "$execution_dir/cancel.members" ] || [ -L "$execution_dir/cancel.members" ]; then
+            state_owner_allowed "$execution_dir/cancel.members" || return 1
+        else
+            # 已自然完成的历史命令不会被补杀或清理。
+            case "$(state_value "$state_file" status)" in STARTING|RUNNING) ;; *) return 0 ;; esac
+            state_has_valid_process || return 1
+            cancel_members="$(collect_cancel_members)" || return 1
+            [ -n "$cancel_members" ] || return 1
+            save_cancel_members || return 1
+        fi
+        # 不相信 wrapper 提前写出的 CANCELLED；必须看到受管会话真的没有活进程。
+        # 重新扫描前要求至少一个已知成员仍在，防止会话号复用后扩大杀伤范围。
+        cancel_attempt=0
+        while [ "$cancel_attempt" -lt 70 ]; do
+            cancel_anchored=false
+            cancel_has_anchor && cancel_anchored=true
+            cancel_members="$(collect_cancel_members)" || return 1
+            if [ -z "$cancel_members" ]; then
+                cleanup_cancelled_execution || return 1
+                write_v2_state CANCELLED 137 "$cancel_session" "$cancel_start_ticks" \
+                    "$(state_value "$state_file" started_at)"
+                cancel_complete_tmp="$(mktemp "$execution_dir/cancel-complete.XXXXXX")" || return 1
+                printf '%s\n' "$request_hash" > "$cancel_complete_tmp"
+                mv -f -- "$cancel_complete_tmp" "$execution_dir/cancel.complete"
+                return 0
+            fi
+            [ "$cancel_anchored" = true ] || return 1
+            save_cancel_members || return 1
+            if [ "$cancel_attempt" -eq 0 ]; then
+                signal_cancel_members TERM
+            elif [ "$cancel_attempt" -ge 50 ]; then
+                signal_cancel_members KILL
+            fi
+            sleep 0.1
+            cancel_attempt="$((cancel_attempt + 1))"
+        done
+        return 1
     }
 
     if [ "$input_mode" = --host-execution-status ] || [ "$input_mode" = --host-execution-result ] || \
        [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --host-watch-executions ] || \
        [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || \
        [ "$input_mode" = --execution-cancel ] || [ "$input_mode" = --watch-execution ] || [ "$input_mode" = --watch-executions ]; then
+        # 停止可能先于远端启动到达。按固定 ID 原子占位，后到的同一请求只能读到 CANCELLED，
+        # 不能出现“取消看到 MISSING 返回了，命令随后又启动”的孤儿任务。
+        if { [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --execution-cancel ]; } &&
+           [ ! -e "$execution_dir" ] && [ ! -L "$execution_dir" ]; then
+            case "$expected_request_hash" in ''|*[!0-9a-f]*) reject_untrusted_state '取消请求哈希无效' ;; esac
+            [ "${#expected_request_hash}" -eq 64 ] || reject_untrusted_state '取消请求哈希长度无效'
+            execution_parent_safe || reject_untrusted_state '取消目标父目录无效'
+            if (umask 077; mkdir "$execution_dir") 2>/dev/null; then
+                : > "$stdout_log"
+                : > "$stderr_log"
+                write_v2_state CANCELLED 0 0 0 0
+            fi
+        fi
         # 查询前先完成信任校验。长监听禁止先读取不可信 state 再等待 25 秒，
         # 否则旧目录会看起来像一条正常运行中的任务。
         if [ -e "$execution_dir" ]; then
@@ -340,7 +493,8 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
           if [ -f "$state_file" ] && [ ! -L "$state_file" ] && \
              execution_parent_safe && execution_directory_safe && state_owner_allowed "$state_file"; then
             current_status="$(state_value "$state_file" status)"
-            if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ]; then
+            if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ] || \
+               [ -e "$execution_dir/cancel.members" ]; then
                 state_hash="$(state_value "$state_file" request_hash)"
                 if [ -n "$expected_request_hash" ] && [ "$state_hash" != "$expected_request_hash" ]; then
                     printf '%s\n' 'Execution request hash 冲突' >&2
@@ -348,42 +502,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
                 fi
                 request_hash="$state_hash"
                 state_started="$(state_value "$state_file" started_at)"
-                if state_has_expected_identity && state_has_valid_process && \
-                   process_group_owner_allowed "$(state_value "$state_file" pid)"; then
-                    kill -TERM "-$(state_value "$state_file" pid)" 2>/dev/null || true
-                    attempt=0
-                    while [ "$attempt" -lt 50 ]; do
-                        current_status="$(state_value "$state_file" status)"
-                        [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ] || break
-                        sleep 0.1
-                        attempt="$((attempt + 1))"
-                    done
-                    current_status="$(state_value "$state_file" status)"
-                    if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ]; then
-                        if state_has_expected_identity && state_has_valid_process && \
-                           process_group_owner_allowed "$(state_value "$state_file" pid)"; then
-                            kill -KILL "-$(state_value "$state_file" pid)" 2>/dev/null || true
-                        fi
-                        attempt=0
-                        while [ "$attempt" -lt 20 ]; do
-                            current_status="$(state_value "$state_file" status)"
-                            [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ] || break
-                            sleep 0.1
-                            attempt="$((attempt + 1))"
-                        done
-                        current_status="$(state_value "$state_file" status)"
-                        if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ]; then
-                            # KILL 后仍能确认进程存在时不能伪造 CANCELLED，保留 UNKNOWN 交给 Android 重试。
-                            if state_has_valid_process; then
-                                write_v2_state UNKNOWN '' "$(state_value "$state_file" pid)" \
-                                    "$(state_value "$state_file" start_ticks)" "$state_started"
-                            else
-                                write_v2_state CANCELLED 137 "$(state_value "$state_file" pid)" \
-                                    "$(state_value "$state_file" start_ticks)" "$state_started"
-                            fi
-                        fi
-                    fi
-                else
+                if ! cancel_managed_execution; then
                     request_hash="$(state_value "$state_file" request_hash)"
                     state_started="$(state_value "$state_file" started_at)"
                     write_v2_state UNKNOWN '' "$(state_value "$state_file" pid)" \
@@ -499,7 +618,10 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         state_started="$(date +%s)"
         handle_signal() {
             trap - HUP INT TERM
-            write_v2_state CANCELLED 143 "$state_pid" "$state_ticks" "$state_started"
+            # 受管 cancel 由取消端确认整个会话已退出后发布终态，不能由主进程提前报成功。
+            signal_status=CANCELLED
+            [ ! -e "$execution_dir/cancel.members" ] || signal_status=UNKNOWN
+            write_v2_state "$signal_status" 143 "$state_pid" "$state_ticks" "$state_started"
             cleanup_v2_runtime
             exit 143
         }
@@ -549,7 +671,9 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         command_status="$?"
         set -e
         trap - HUP INT TERM
-        if [ "$command_status" -eq 0 ]; then
+        if [ -e "$execution_dir/cancel.members" ]; then
+            write_v2_state UNKNOWN '' "$state_pid" "$state_ticks" "$state_started"
+        elif [ "$command_status" -eq 0 ]; then
             write_v2_state SUCCEEDED "$command_status" "$state_pid" "$state_ticks" "$state_started"
         elif [ "$command_status" -eq 124 ] || [ "$command_status" -eq 137 ]; then
             write_v2_state TIMED_OUT "$command_status" "$state_pid" "$state_ticks" "$state_started"
@@ -587,9 +711,11 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         fi
         [ ! -e "$execution_dir" ] || { printf '%s\n' 'Execution 目录已存在但状态无效' >&2; exit 47; }
         umask 077
-        mkdir -p "$execution_dir"
+        # 与提前到达的 cancel 竞争时只允许一个请求创建目录，不能覆盖取消占位。
+        mkdir "$execution_dir" || exit 47
         cleanup_outer() {
             rm -f -- "$environment_file" "$stdin_file" "$working_directory_file" "$command_file"
+            rm -f -- "$runtime_dir/execution.id"
             rmdir "$runtime_dir" 2>/dev/null || true
             rmdir "$execution_dir" 2>/dev/null || true
         }
@@ -612,6 +738,8 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         [ "$command_size" -ge 1 ] && [ "$command_size" -le 1048576 ] || exit 41
         [ "$stdin_size" -le 4194304 ] || exit 41
         mkdir -p "$runtime_dir"
+        printf '%s\n' "$runtime_name" > "$execution_dir/runtime.id"
+        printf '%s\n' "$execution_id" > "$runtime_dir/execution.id"
         if [ "$cwd_size" -gt 0 ]; then
             dd if=/dev/stdin of="$working_directory_file" bs="$cwd_size" count=1 iflag=fullblock 2>/dev/null
             [ "$(wc -c < "$working_directory_file")" -eq "$cwd_size" ] || exit 41

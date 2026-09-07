@@ -113,11 +113,17 @@ object ComputerConnectionServiceController {
         val appContext = context.applicationContext
         val tokenId = UUID.randomUUID().toString()
         activeAgentRunTokens[tokenId] = Unit
-        AgentRecoveryScheduler.schedule(appContext)
-        ContextCompat.startForegroundService(
-            appContext,
-            Intent(appContext, ComputerConnectionService::class.java).setAction(ACTION_START),
-        )
+        try {
+            AgentRecoveryScheduler.schedule(appContext)
+            ContextCompat.startForegroundService(
+                appContext,
+                Intent(appContext, ComputerConnectionService::class.java).setAction(ACTION_START),
+            )
+        } catch (error: Exception) {
+            // 系统拒绝启动时还没有 Closeable 可供调用者释放，必须在这里撤销令牌。
+            activeAgentRunTokens.remove(tokenId)
+            throw error
+        }
         return object : Closeable {
             private val closed = AtomicBoolean(false)
 

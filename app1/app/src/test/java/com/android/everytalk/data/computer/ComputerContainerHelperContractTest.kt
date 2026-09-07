@@ -96,7 +96,7 @@ class ComputerContainerHelperContractTest {
             .substringAfter("delete_workspace() {")
             .substringBefore("\n}\n\nrequire_root")
 
-        assertTrue(helper.contains("VERSION=\"9\""))
+        assertTrue(helper.contains("VERSION=\"$COMPUTER_BOOTSTRAP_VERSION\""))
         assertTrue(helper.contains("docker exec -i"))
         assertTrue(helper.contains("runtime_target=\"\$RUNTIME_WRAPPER_PATH-\$runtime_hash\""))
         assertTrue(helper.contains("ln -sfn"))
@@ -117,7 +117,7 @@ class ComputerContainerHelperContractTest {
         assertTrue(runtimeWrapper.contains("execution_directory_safe || reject_untrusted_state"))
         assertTrue(runtimeWrapper.contains("path_owner_allowed"))
         assertTrue(runtimeWrapper.contains("state_has_expected_identity"))
-        assertTrue(runtimeWrapper.contains("process_group_owner_allowed"))
+        assertTrue(runtimeWrapper.contains("cancel_member_matches"))
         assertTrue(runtimeWrapper.contains("ensure_host_private_dir"))
         assertTrue(runtimeWrapper.contains("root_real=\"$(realpath -e -- \"\$root\""))
         assertTrue(runtimeWrapper.contains("write_v2_state UNKNOWN"))
@@ -125,7 +125,7 @@ class ComputerContainerHelperContractTest {
     }
 
     @Test
-    fun `Wrapper升级会重建受管Container并保留Workspace挂载`() {
+    fun `Wrapper升级复用Container且不得停止服务或删除容器`() {
         val helper = helperSource()
         val ensureWorkspaceBody = helper
             .replace("\r\n", "\n")
@@ -133,10 +133,10 @@ class ComputerContainerHelperContractTest {
             .substringBefore("\n}\n\ncontainer_address")
 
         assertTrue(ensureWorkspaceBody.contains("runtime_hash=\"\$(runtime_wrapper_hash)\""))
-        assertTrue(ensureWorkspaceBody.contains("mounted_wrapper_hash="))
+        assertTrue(helper.contains("current_wrapper=\"\$(container_runtime)\""))
         assertTrue(ensureWorkspaceBody.contains("com.everytalk.wrapper=\$runtime_hash"))
-        assertTrue(ensureWorkspaceBody.contains("stop_workspace_backgrounds \"\$workspace_id\" \"\$name\""))
-        assertTrue(ensureWorkspaceBody.contains("docker rm --force \"\$name\""))
+        assertFalse(ensureWorkspaceBody.contains("stop_workspace_backgrounds"))
+        assertFalse(ensureWorkspaceBody.contains("docker rm"))
         assertTrue(ensureWorkspaceBody.contains("--mount \"type=bind,src=\$workspace,dst=/workspace\""))
         assertTrue(ensureWorkspaceBody.contains("src=\$RUNTIME_WRAPPER_PATH-\$runtime_hash"))
         assertFalse(ensureWorkspaceBody.contains("rm -rf -- \"\$workspace\""))

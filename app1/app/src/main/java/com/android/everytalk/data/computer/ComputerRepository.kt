@@ -242,7 +242,9 @@ class ComputerRepository(
         if (current.runMode != ComputerRunMode.CONTAINER) {
             throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器使用 Direct 模式")
         }
-        if (hasActiveContainerExecution(dao.getActiveRemoteExecutionsForComputer(computerId))) {
+        val runtimeOnlyUpgrade = current.canUseRuntimeOnlyUpgrade()
+        // 轻量升级不再重建容器，可以保留正常服务；完整配置仍要求没有活动 Container 任务。
+        if (!runtimeOnlyUpgrade && hasActiveContainerExecution(dao.getActiveRemoteExecutionsForComputer(computerId))) {
             throw ComputerException(
                 code = ComputerErrorCodes.COMPUTER_NOT_READY,
                 message = "当前还有 Container 任务在运行，请等待任务完成后升级",
@@ -250,7 +252,6 @@ class ComputerRepository(
                 action = "WAIT_FOR_CONTAINER_TASKS",
             )
         }
-        val runtimeOnlyUpgrade = current.canUseRuntimeOnlyUpgrade()
         val sudoPassword = if (current.username == "root") {
             null
         } else {
@@ -653,6 +654,8 @@ class ComputerRepository(
     suspend fun watchRemoteExecution(executionId: String): ComputerRemoteExecutionWatchEvent {
         val execution = dao.getExecutionById(executionId)
             ?: throw ComputerException(ComputerErrorCodes.EXECUTION_NOT_FOUND, "远端任务不存在")
+        // 重连后先补发这条任务已登记的停止请求，不能只恢复日志监听而让命令继续跑。
+        if (execution.shouldRetryRemoteCancellation()) cancelRemoteExecution(execution.id)
         val computer = dao.getComputer(execution.computerId)?.toModel(json)
             ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
         val workspace = dao.getWorkspaceById(execution.workspaceId)?.toModel()
@@ -705,8 +708,8 @@ class ComputerRepository(
     /**
      * 取消一个仍在 VPS 上运行的受管 Execution。
      *
-     * 停止按钮先取消远端进程，再由上层取消模型协程。这样 Android 协程结束后，VPS
-     * 仍会收到一次带身份校验的 cancel 请求，不会留下“本地已停、远端继续跑”的假状态。
+     * 与本地 Agent 协程的取消独立进行；仅凭本地取消不能宣称 VPS 已停止。
+     * 查询和重试始终固定 Execution ID 与请求哈希，不扩大到会话或其他命令。
      */
     suspend fun cancelRemoteExecution(executionId: String): ComputerRemoteExecutionSnapshot? {
         val execution = dao.getExecutionById(executionId) ?: return null
@@ -793,8 +796,20 @@ class ComputerRepository(
             ?: ComputerExecTarget.CONTAINER
         return try {
             // 恢复查询允许 OFFLINE/DISCONNECTED 服务器受控重连；真正连接失败由 Unavailable 保留原状态。
-            val snapshot = withConnection(computer.id, requireReady = false) { connection, _ ->
-                runtimeEnvelope.queryExecutionStatus(
+            val snapshot = withConnection(computer.id, requireReady = false) { connection, currentComputer ->
+                // 只有停止按钮已落库的取消意图才允许补发 cancel；普通断线恢复仍然只查询。
+                // 不根据 Run 的 CANCELLED 状态批量停止任务，避免误杀已经交付的后台服务。
+                if (execution.shouldRetryRemoteCancellation()) {
+                    runtimeEnvelope.cancelExecution(
+                        connection = connection,
+                        computer = currentComputer,
+                        workspace = workspace,
+                        executionId = execution.id,
+                        target = target,
+                        expectedProcessId = execution.remoteProcessId,
+                        expectedRequestHash = execution.requestHash,
+                    )
+                } else runtimeEnvelope.queryExecutionStatus(
                     connection = connection,
                     computer = computer,
                     workspace = workspace,

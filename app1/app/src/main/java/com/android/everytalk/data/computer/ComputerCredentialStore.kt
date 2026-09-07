@@ -345,6 +345,32 @@ class ComputerCredentialStore(private val context: Context) {
         cryptoShred(fileForScope("oauth-verifier:$reference"))
     }
 
+    /**
+     * Agent 执行期长期授权材料。reference 由 Broker 生成并只作为 StoredAuthorization 引用保存。
+     * Secret 正文仍只进入 Keystore 封装文件，不进入 Room、Tool Call 或模型上下文。
+     */
+    suspend fun saveAgentAuthorization(reference: String, value: CharArray) {
+        requireAgentAuthorizationReference(reference)
+        saveCredential("agent-authorization:$reference", ComputerCredential.Password(value))
+    }
+
+    suspend fun loadAgentAuthorization(reference: String): CharArray? {
+        requireAgentAuthorizationReference(reference)
+        val credential = loadOptionalCredential("agent-authorization:$reference") ?: return null
+        return when (credential) {
+            is ComputerCredential.Password -> credential.password
+            else -> {
+                credential.clear()
+                null
+            }
+        }
+    }
+
+    suspend fun deleteAgentAuthorization(reference: String) = withContext(Dispatchers.IO) {
+        requireAgentAuthorizationReference(reference)
+        cryptoShred(fileForScope("agent-authorization:$reference"))
+    }
+
     private suspend fun saveCredential(scope: String, credential: ComputerCredential) = withContext(Dispatchers.IO) {
         val plaintext = ComputerCredentialCodec.encode(credential)
         try {
@@ -363,6 +389,13 @@ class ComputerCredentialStore(private val context: Context) {
             ComputerCredentialCodec.decode(plaintext)
         } finally {
             plaintext.fill(0)
+        }
+    }
+
+    private fun requireAgentAuthorizationReference(reference: String) {
+        require(reference.isNotBlank() && reference.length <= 160 &&
+            reference.all { it.isLetterOrDigit() || it in setOf('-', '_', '.', ':') }) {
+            "Agent authorization reference 无效"
         }
     }
 

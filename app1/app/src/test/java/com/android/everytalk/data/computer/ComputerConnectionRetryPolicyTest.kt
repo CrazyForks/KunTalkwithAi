@@ -26,6 +26,7 @@ class ComputerConnectionRetryPolicyTest {
 
         assertTrue(container.needsContainerRuntimeUpgrade())
         assertTrue(container.canUseRuntimeOnlyUpgrade())
+        assertTrue(container.copy(bootstrapVersion = "9").canUseRuntimeOnlyUpgrade())
         assertFalse(container.copy(bootstrapVersion = null).needsContainerRuntimeUpgrade())
         assertFalse(container.copy(capabilities = ComputerCapabilities(dockerAvailable = false)).canUseRuntimeOnlyUpgrade())
         assertFalse(container.copy(runMode = ComputerRunMode.DIRECT).needsContainerRuntimeUpgrade())
