@@ -35,7 +35,7 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 
 1. 普通聊天、MCP、联网搜索、VPS Agent 全部进入同一个 Kotlin `AgentLoop`。
 2. 四种协议只通过 `streamSingleTurn` 执行单次模型请求，工具循环和上下文推进由 AgentLoop 负责。
-3. Room 32 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction、Provider continuation、非敏感恢复快照、steering 完整结构化引用和 Computer 远端执行字段。
+3. Room 33 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction、Provider continuation、非敏感恢复快照、steering 完整结构化引用、Intervention 安全引用和 Computer 远端执行字段。
 4. 上下文按完整工具原子组重建，压缩保留近期原文，支持超长单轮切分。
 5. 文本发送前的旧 `AutoContextCompression` 已退出正式路径，避免旧链与 AgentLoop 双重压缩；图片路径只保留窗口裁剪。
 6. OpenAI Responses、Anthropic、Gemini 和 OpenAI 兼容推理内容的当前 Run 连续状态已接入。
@@ -49,6 +49,13 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 14. steering 在下一模型边界消费，follow-up 只在 Agent 原本准备结束时消费，默认均为 one-at-a-time。
 15. follow-up 复用持久化 Pending 队列，在同一 Room 事务中删除 Pending、写 FOLLOW_UP Entry、保存用户历史和更新 Skill 冻结快照；附件只保存文件引用，消费时才生成多模态内容。
 16. Provider 临时失败沿用同一模型轮和同一 `modelTurnOrdinal`，默认最多执行三次自动重试；第四次失败进入明确终态。
+17. 展开历史时跳过已经由 steering/follow-up AgentEntry 投影的用户消息，避免普通聊天历史副本与 Agent Transcript 重复入模。
+18. 队列存在但恢复快照或附件无法恢复时，Pending 事实保留，AgentRun 进入 `queued_message_recovery_failed` 明确失败，不会静默停在非终态。
+19. 每次真实 Provider 请求和压缩请求前重新从当前配置解析 API Key，长 Run 不固化过期 Key。
+20. Gemini 流式回包中的 `thoughtSignature-only` 元数据碎片不会进入下一轮；原始 REST/代理链中的空 `text` 签名块同样丢弃，避免空字符串在 JSON 转 protobuf 后失去 oneof presence；非空 `text` 或 `functionCall` 上的合法签名仍原位保留。
+21. 已提供不携带正文、Tool 参数或 Secret 的 Pi 生命周期事件：Agent、Turn、Message 和 Tool execution 均有开始/结束事件，工具状态更新独立投影；单轮流式收集拆出 `AgentLoop.run()`，避免 Kotlin 协程生成方法超过 JVM 64KB 上限。
+22. Anthropic 与 OpenAI Responses 的原生压缩不兼容降级不再由 Provider Client 偷偷发送第二次 HTTP；Client 只缓存端点能力并返回可安全重试结果，下一次 attempt 由 AgentLoop 建立独立 AgentRequest。收到正文、推理或 Tool Call 后的网络失败禁止自动重试。
+23. 正常结束但没有正文和 Tool Call 的最终模型轮会进入 `empty_model_response` 明确失败，空思考签名不会被误记为成功回答。
 
 后续范围外项目：
 
@@ -56,7 +63,7 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 
 本轮补齐：
 
-1. Room 32 保存不含 API Key 的恢复快照，`WAITING_APPROVAL` 和 `WAITING_REMOTE_EXECUTION` 跨进程保留。
+1. Room 33 保存不含 API Key 的恢复快照，`WAITING_APPROVAL`、`WAITING_REMOTE_EXECUTION` 和 Intervention 非终态跨进程保留。
 2. 审批请求、决定和剩余 Tool Call 从原 Run 恢复，同一 `approvalRequestId` 只能决策一次。
 3. 多会话审批以 Room 列表保存，界面只投影当前会话对应卡片。
 4. Host 命令、Public Preview 和 UNKNOWN 恢复统一进入持久化审批链。
@@ -854,6 +861,12 @@ ProviderContinuationState 的有效键包括：
 6. Run 进入 CANCELLED。
 7. 禁止取消清理误删已经完成的 Tool Result。
 
+Run termination 的优先级高于 Suspension：
+
+* WAITING_USER、WAITING_USER_REENTRY、RESOLUTION_RECEIVED、DELIVERED、READY_TO_RESUME、RESUMING 等尚未进入外部履行的 Suspension，在同一终止事务中标记为 `CANCELLED`，清除 resolution nonce，并把对应 Execution Slot 投影为失败封存状态。
+* FULFILLING、DELIVERY_UNKNOWN、RECONCILIATION_REQUIRED 和 RECONCILING 不伪装成未发生。Run 终止后仍完成外部事实对账，只记录 `DELIVERED`、`NOT_DELIVERED` 或 `UNKNOWN`，绝不恢复 AgentLoop。
+* 终止事务同时撤销尚未消费的 CapabilityGrant，撤销可安全撤销的 ResourceLease；旧 resolve、fulfill、resume、OAuth callback 通过 `runGeneration` 校验全部失效。
+
 ### 12.3 自动重试边界
 
 AgentLoop 已实现 Pi 风格的有限 Provider retry。初始请求 attempt=1，失败后最多再执行三次，因此单个模型轮最多产生 attempt 1、2、3、4 四条请求事实。
@@ -901,6 +914,12 @@ AgentLoop 已实现 Pi 风格的有限 Provider retry。初始请求 attempt=1�
 | Tool UNKNOWN 且写操作 | 禁止自动重放，要求用户决定 |
 | Tool 已完成但结果未回填 | 从幂等记录读取结果并补写 ToolResult |
 
+Suspension 恢复补充规则：
+
+* 冷启动主动扫描 `RESOLUTION_RECEIVED`、`DELIVERED`、`READY_TO_RESUME`、`RESUMING` 和对账中的非终态，不能依赖进程内回调。
+* `RESOLUTION_RECEIVED + EPHEMERAL` 找不到内存材料时回到 `WAITING_USER_REENTRY` 并轮换 nonce；禁止把一次性密码写入 Room。
+* Run 已终止或 generation 不匹配时，未履行 Suspension 只保留 `CANCELLED` 结果；正在履行的 Suspension 继续对账，不触发恢复。
+
 ### 13.3 恢复时的上下文规则
 
 1. 只有 FINAL Assistant 和 FINAL ToolResult 默认进入下一次请求。
@@ -916,7 +935,7 @@ AgentLoop 已实现 Pi 风格的有限 Provider retry。初始请求 attempt=1�
 
 ### 14.1 新实体
 
-当前数据库版本为 32。Agent 基础事实从 17 版开始演进，32 版为 steering 增加结构化消息载荷；附件内容仍保存在应用私有文件，Room 只保存引用。
+当前数据库版本为 33。Agent 基础事实从 17 版开始演进，32 版为 steering 增加结构化消息载荷，33 版为 Intervention 增加可信 UI reason 和安全授权引用；附件及敏感授权内容仍保存在应用私有安全存储，Room 只保存非敏感引用。
 
 #### AgentRunEntity
 
@@ -1215,7 +1234,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 阶段 2：建立中立 Agent 模型和持久化
 
-当前状态：已完成主链与 Room 32 持久化；界面继续兼容原 executionTrace，并在 Run 恢复时从 AgentEntry 重建顺序。
+当前状态：已完成主链与 Room 33 持久化；界面继续兼容原 executionTrace，并在 Run 恢复时从 AgentEntry 重建顺序。
 
 实施：
 
@@ -1394,7 +1413,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 18.3 Room Migration Test
 
-覆盖 Agent 相关关键迁移直到当前 32 版，检查：
+覆盖 Agent 相关关键迁移直到当前 33 版，检查：
 
 * 原会话和消息数量不变。
 * 新表与索引完整。
@@ -1404,6 +1423,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 * 17→18 保留旧 Agent 事实，并增加恢复快照和 Provider 协议身份字段。
 * 18→19 保留旧 ComputerExecution，并增加七个可空的远端执行字段。
 * 31→32 保留旧 steering 文本，并增加可空的结构化 `payloadJson`。
+* 32→33 保留旧 Suspension，并增加可信 UI reason、context 和非敏感 `resolutionReference`。
 * Runtime V2 的成功、失败、取消、MISSING、协议损坏和网络不可用分支不互相误判。
 
 ### 18.4 已知日志回归
@@ -1459,9 +1479,9 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 20. steering 和 follow-up 支持文本、附件与 SkillReference，并在同一 AgentRun 按 Pi 边界消费。
 21. follow-up 与用户历史、Transcript 和 Skill 快照的持久化不存在半完成窗口。
 
-当前实施状态：以上 21 项均已落入正式 Android 本地路径。自动验证覆盖上下文、逐请求 Usage、恢复快照、Room 迁移、审批原子暂停与单次决策、工具执行中断分流、同批剩余调用、UNKNOWN 用户决定、Provider continuation 失效、模型与工具循环限制、工具结果私有归档；真机交互继续由用户验收。
+当前实施状态：以上 23 项均已落入正式 Android 本地路径。自动验证覆盖上下文、逐请求 Usage、恢复快照、Room 迁移、审批原子暂停与单次决策、工具执行中断分流、同批剩余调用、UNKNOWN 用户决定、Provider continuation 失效、模型与工具循环限制、工具结果私有归档、steering/follow-up 同 Run 续接和队列历史去重；真机交互继续由用户验收。
 
-协议收口同时覆盖四套 Provider Adapter、Gemini Part oneof 清理、Provider retry、并行 Tool、steering、follow-up、多模态队列、SkillReference 冻结和后台用户历史持久化。ADB 已关闭，因此 Gemini 3.7 真实接口与 Release 真机行为仍属于人工验收项。
+协议收口同时覆盖四套 Provider Adapter、Gemini Part oneof 清理、Provider retry、并行 Tool、steering、follow-up、多模态队列、SkillReference 冻结、历史去重、队列恢复失败终态和后台用户历史持久化。ADB 已关闭，因此 Gemini 3.7 真实接口与 Release 真机行为仍属于人工验收项。
 
 ## 二十、风险与取舍
 
