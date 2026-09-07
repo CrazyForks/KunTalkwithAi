@@ -871,6 +871,7 @@
     <string name="image_share">Share image</string>
     <string name="image_editor_select_area">Select the area to edit</string>
     <string name="action_undo">Undo</string>
+    <string name="chat_input_restore_message">Restore original conversation</string>
     <string name="action_redo">Redo</string>
     <string name="action_next">Next</string>
     <string name="image_add_model_title">Add image model</string>

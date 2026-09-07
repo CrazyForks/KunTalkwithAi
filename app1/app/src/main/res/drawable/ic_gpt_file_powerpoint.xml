@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GPT file_powerpoint：内联原始渐变资源，保持图形和配色，并兼容 Android 资源编译。 -->
+<vector xmlns:aapt="http://schemas.android.com/aapt" xmlns:android="http://schemas.android.com/apk/res/android" android:height="24.0dip" android:width="24.0dip" android:viewportWidth="24.0" android:viewportHeight="24.0">
+    <path android:pathData="M13.004,2.594C13.27,2.594 13.541,2.668 13.816,2.818C14.091,2.968 14.399,3.211 14.741,3.544L19.691,8.443C20.233,8.985 20.504,9.535 20.504,10.094V17.544C20.504,18.269 20.325,18.94 19.967,19.557C19.608,20.165 19.12,20.648 18.504,21.006C17.895,21.364 17.229,21.544 16.504,21.544H7.504C6.779,21.544 6.108,21.364 5.491,21.006C4.883,20.648 4.399,20.165 4.041,19.557C3.682,18.94 3.504,18.269 3.504,17.544V6.594C3.504,5.869 3.683,5.202 4.041,4.594C4.399,3.977 4.883,3.489 5.491,3.131C6.108,2.773 6.779,2.594 7.504,2.594H13.004Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:angle="0.0" android:type="linear" android:startX="4.504" android:startY="20.594" android:endX="16.004" android:endY="7.094">
+                <item android:color="#fff35aaa" android:offset="0.024" />
+                <item android:color="#ffe1473d" android:offset="0.529" />
+                <item android:color="#ffb0212c" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M14.675,8.594H9.332C8.322,8.594 7.504,9.412 7.504,10.422V15.766C7.504,16.775 8.322,17.594 9.332,17.594H14.675C15.685,17.594 16.504,16.775 16.504,15.766V10.422C16.504,9.412 15.685,8.594 14.675,8.594Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:angle="0.0" android:type="radial" android:centerX="7.503" android:centerY="8.594" android:gradientRadius="12.728">
+                <item android:color="#fff8193e" android:offset="0.0" />
+                <item android:color="#ff920616" android:offset="0.939" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M14.675,8.594H9.332C8.322,8.594 7.504,9.412 7.504,10.422V15.766C7.504,16.775 8.322,17.594 9.332,17.594H14.675C15.685,17.594 16.504,16.775 16.504,15.766V10.422C16.504,9.412 15.685,8.594 14.675,8.594Z" android:fillAlpha="0.3">
+        <aapt:attr name="android:fillColor">
+            <gradient android:angle="0.0" android:type="radial" android:centerX="12.002" android:centerY="13.994" android:gradientRadius="6.3">
+                <item android:color="#00ffb055" android:offset="0.576" />
+                <item android:color="#fffff2be" android:offset="0.974" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#ffffffff" android:pathData="M11.565,13.99V15.665H10.407V10.522H12.196C12.836,10.522 13.324,10.662 13.658,10.942C13.995,11.222 14.164,11.636 14.164,12.186C14.164,12.753 13.975,13.195 13.598,13.513C13.222,13.831 12.718,13.99 12.085,13.99H11.565ZM11.565,11.412V13.101H12.049C12.336,13.101 12.557,13.026 12.712,12.875C12.868,12.724 12.945,12.508 12.945,12.226C12.945,11.965 12.869,11.764 12.716,11.623C12.565,11.482 12.349,11.412 12.067,11.412H11.565Z" />
+    <path android:pathData="M13.004,2.594C13.27,2.594 13.541,2.669 13.816,2.819C14.091,2.969 14.399,3.21 14.741,3.544L19.691,8.444C20.233,8.985 20.504,9.535 20.504,10.094H15.716C14.883,10.094 14.22,9.852 13.729,9.369C13.245,8.877 13.004,8.215 13.004,7.381V2.594Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:angle="0.0" android:type="linear" android:startX="16.504" android:startY="6.094" android:endX="13.504" android:endY="9.594">
+                <item android:color="#ffff8f29" android:offset="0.0" />
+                <item android:color="#fffe80ad" android:offset="0.851" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

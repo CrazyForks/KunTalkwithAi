@@ -867,6 +867,7 @@
     <string name="image_share">分享图片</string>
     <string name="image_editor_select_area">选择要编辑的区域</string>
     <string name="action_undo">撤销</string>
+    <string name="chat_input_restore_message">复原原消息及后续回答</string>
     <string name="action_redo">重做</string>
     <string name="action_next">下一步</string>
     <string name="image_add_model_title">添加图像模型</string>
