@@ -500,19 +500,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     internal val dialogManager = DialogManager()
     internal val editMessageController = EditMessageController(
         stateHolder = stateHolder,
-        dialogManager = dialogManager,
         historyManager = historyManager,
         scope = viewModelScope,
         messagesMutex = messagesMutex,
-        clearMessageCache = ::clearMessageCache
+        clearMessageCache = ::clearMessageCache,
+        showSnackbar = ::showSnackbar,
+        canEdit = {
+            pendingMessageController.composerMode.value == com.android.everytalk.statecontroller.ComposerMode.Normal &&
+                pendingMessageController.pendingMessages.value.isEmpty() &&
+                pendingMessageController.runState.value == com.android.everytalk.statecontroller.ChatRunState.Idle
+        },
     )
-    val showEditDialog: StateFlow<Boolean> = dialogManager.showEditDialog
-    val editingMessage: StateFlow<Message?> = dialogManager.editingMessage
+    val restoredMessageDraft = editMessageController.restoredDraft
+    val isRestoringMessage = editMessageController.restoring
+    val messageEditSession = editMessageController.editSession
     val showSystemPromptDialog: StateFlow<Boolean> = dialogManager.showSystemPromptDialog
     val showAboutDialog: StateFlow<Boolean> = dialogManager.showAboutDialog
     val showClearImageHistoryDialog: StateFlow<Boolean> = dialogManager.showClearImageHistoryDialog
-    val editDialogInputText: StateFlow<String>
-        get() = stateHolder._editDialogInputText.asStateFlow()
 
     // 新增:添加配置流程相关的对话框状态
     val showAutoFetchConfirmDialog: StateFlow<Boolean>

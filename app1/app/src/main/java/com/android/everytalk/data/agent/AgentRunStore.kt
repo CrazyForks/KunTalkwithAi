@@ -1106,7 +1106,9 @@ class AgentRunStore(
         if (runsByMessageId.isEmpty()) return messages
         // steering/follow-up 同时会写入普通聊天历史供 UI 展示。它们已经由 AgentEntry
         // 投影到对应 Run，重新组装上下文时必须跳过历史副本，否则模型会收到两遍用户指令。
+        val visibleMessageIds = messages.mapTo(hashSetOf()) { it.id }
         val projectedQueuedMessageIds = runsByMessageId.values
+            .filter { it.visibleAssistantMessageId in visibleMessageIds }
             .flatMap { run ->
                 dao.getEntries(run.id)
                     .asSequence()
@@ -1131,7 +1133,7 @@ class AgentRunStore(
                     add(message)
                     return@forEach
                 }
-                val expanded = decodeFinalTranscriptEntries(run.id)
+                val expanded = decodeFinalTranscriptEntries(run.id, visibleMessageIds)
                 if (expanded.isEmpty()) add(message) else addAll(expanded)
             }
         }
@@ -1498,13 +1500,20 @@ class AgentRunStore(
             finalizedAt = now.takeIf { status == AgentEntryStatus.FINAL },
         )
 
-    private suspend fun decodeFinalTranscriptEntries(runId: String): List<AbstractApiMessage> {
+    private suspend fun decodeFinalTranscriptEntries(runId: String, visibleMessageIds: Set<String>? = null): List<AbstractApiMessage> {
         val requestsById = dao.getRequests(runId).associateBy(AgentRequestEntity::id)
         val sourceProtocol = dao.getRun(runId)
             ?.let { run -> decodeRequestSnapshot(run) }
             ?.channel
             ?.let(::modelParameterProtocol)
-        return dao.getEntries(runId).mapNotNull { entry ->
+        // 回退到同一 Run 的追加消息之前时，旧内部记录仍供审计使用，但不能重新进入上下文。
+        val entries = dao.getEntries(runId).takeWhile { entry ->
+            visibleMessageIds == null ||
+                entry.status != AgentEntryStatus.FINAL.name ||
+                entry.kind !in setOf(AgentEntryKind.STEERING.name, AgentEntryKind.FOLLOW_UP.name) ||
+                json.decodeFromString(AgentSteeringInstruction.serializer(), entry.payloadJson).id in visibleMessageIds
+        }
+        return entries.mapNotNull { entry ->
             if (entry.status != AgentEntryStatus.FINAL.name) return@mapNotNull null
             when (entry.kind) {
                 AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(

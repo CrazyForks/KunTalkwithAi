@@ -1,6 +1,7 @@
 package com.android.everytalk.data.database
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
@@ -304,8 +305,12 @@ class RoomDataSource(context: Context) {
         messages: List<Message>,
         isImageGeneration: Boolean,
     ) {
-        if (messages.isEmpty()) return
         val existingSession = chatDao.getSession(sessionId)
+        // 编辑首条消息会回退到空对话。保留会话身份和资源，只清空已有消息。
+        if (messages.isEmpty()) {
+            if (existingSession != null) chatDao.saveSessionWithMessages(existingSession, emptyList(), sessionChanged = false)
+            return
+        }
         val persistedMessages = ConversationNameHelper.withoutStoredConversationTitle(messages)
         val session = ChatSessionEntity(
             id = sessionId,
@@ -332,6 +337,21 @@ class RoomDataSource(context: Context) {
             chatDao.deleteSession(sessionId)
             val toolResultStore = AgentToolResultStore(applicationContext)
             runIds.forEach { runId -> toolResultStore.deleteRun(runId) }
+        }
+    }
+
+    /** 历史、最近打开记录和旧 Provider 会话状态一起提交，失败时整体回滚。 */
+    suspend fun rewindHistorySession(sessionId: String, messages: List<Message>, isImageGeneration: Boolean, updateLastOpen: Boolean) {
+        database.withTransaction {
+            saveLoadedHistorySession(sessionId, messages, isImageGeneration)
+            if (!isImageGeneration) database.agentDao().deleteContinuationStates(sessionId)
+            if (updateLastOpen) {
+                saveLastOpenSession(
+                    if (isImageGeneration) "last_open_image_generation_v1" else "last_open_chat_v1",
+                    ConversationNameHelper.withoutStoredConversationTitle(messages),
+                    isImageGeneration,
+                )
+            }
         }
     }
 
@@ -393,7 +413,9 @@ class RoomDataSource(context: Context) {
     // BUT, the message IDs must be preserved. If we change session ID, message IDs are fine.
     
     suspend fun loadLastOpenChat(): List<Message> {
-        return chatDao.getMessagesForSession("last_open_chat_v1").map { it.toMessage() }
+        return chatDao.getMessagesForSession("last_open_chat_v1").map {
+            it.toMessage().copy(id = it.id.removePrefix("last_open_chat_v1:"))
+        }
     }
 
     suspend fun saveLastOpenChat(messages: List<Message>) {
@@ -401,7 +423,9 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun loadLastOpenImageGenerationChat(): List<Message> {
-        return chatDao.getMessagesForSession("last_open_image_generation_v1").map { it.toMessage() }
+        return chatDao.getMessagesForSession("last_open_image_generation_v1").map {
+            it.toMessage().copy(id = it.id.removePrefix("last_open_image_generation_v1:"))
+        }
     }
 
     suspend fun saveLastOpenImageGenerationChat(messages: List<Message>) {
@@ -419,7 +443,11 @@ class RoomDataSource(context: Context) {
                 isImageGeneration = isImageGen,
                 title = "Last Open"
             )
-            chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(sessionId, converters) })
+            // messages.id 是全表主键。快照使用独立存储 ID，避免 Upsert 把历史消息移入快照会话。
+            // 对外读取时去掉该前缀，保持气泡、附件和 Agent 引用的真实消息 ID 不变。
+            chatDao.saveSessionWithMessages(session, messages.map {
+                it.copy(id = "$sessionId:${it.id}").toEntity(sessionId, converters)
+            })
         }
     }
 

@@ -712,6 +712,13 @@ class DataPersistenceManager(
         }
     }
 
+    /** 回退只更新消息记录，不回收输入框仍需使用的附件文件。 */
+    suspend fun rewindHistorySession(sessionId: String, messages: List<Message>, isImageGeneration: Boolean, updateLastOpen: Boolean) {
+        withContext(Dispatchers.IO) {
+            roomDataSource.rewindHistorySession(sessionId, messages, isImageGeneration, updateLastOpen)
+        }
+    }
+
     /** 打开、分享时按会话读取完整消息，启动阶段不调用。 */
     suspend fun loadHistorySession(sessionId: String): List<Message>? = withContext(Dispatchers.IO) {
         val original = roomDataSource.loadHistorySession(sessionId) ?: return@withContext null

@@ -1,11 +1,10 @@
 package com.android.everytalk.models
 
+import androidx.annotation.DrawableRes
+
 import android.graphics.Bitmap
 import android.content.Context
 import android.net.Uri
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.*
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.annotation.StringRes
 import com.android.everytalk.R
 import kotlinx.serialization.Serializable
@@ -24,9 +23,9 @@ interface IMediaItem {
     val mimeType: String
 }
 
-enum class ImageSourceOption(@StringRes val labelRes: Int, val icon: ImageVector) {
-    ALBUM(R.string.chat_input_album, Icons.Outlined.PhotoLibrary),
-    CAMERA(R.string.chat_input_camera, Icons.Outlined.PhotoCamera)
+enum class ImageSourceOption(@StringRes val labelRes: Int, @DrawableRes val icon: Int) {
+    ALBUM(R.string.chat_input_album, R.drawable.ic_image_gallery),
+    CAMERA(R.string.chat_input_camera, R.drawable.ic_camera)
 }
 
 object AttachmentMimeTypes {
@@ -51,9 +50,9 @@ object AttachmentMimeTypes {
     )
 }
 
-enum class MoreOptionsType(@StringRes val labelRes: Int, val icon: ImageVector, val mimeTypes: Array<String>) {
-    ATTACHMENT(R.string.chat_input_attachment, Icons.Outlined.AttachFile, AttachmentMimeTypes.TYPES),
-    MCP(R.string.chat_input_mcp, Icons.Outlined.Extension, arrayOf())
+enum class MoreOptionsType(@StringRes val labelRes: Int, @DrawableRes val icon: Int, val mimeTypes: Array<String>) {
+    ATTACHMENT(R.string.chat_input_attachment, R.drawable.ic_paperclip, AttachmentMimeTypes.TYPES),
+    MCP(R.string.chat_input_mcp, R.drawable.ic_gpt_puzzle_piece, arrayOf())
 }
 
 @Serializable

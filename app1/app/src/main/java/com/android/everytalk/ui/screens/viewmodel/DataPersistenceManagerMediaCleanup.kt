@@ -138,6 +138,8 @@ internal suspend fun DataPersistenceManager.cleanupOrphanedAttachmentsInternal(v
                 // 从最后打开的会话收集
                 referencedPaths += collectReferencedAttachmentPaths(roomDataSource.loadLastOpenChat())
                 referencedPaths += collectReferencedAttachmentPaths(roomDataSource.loadLastOpenImageGenerationChat())
+                // 回退编辑尚未发送时，整段原对话仍可复原，不能作为孤立附件回收。
+                referencedPaths += collectReferencedAttachmentPaths(stateHolder.messageEditSession.value?.originalMessages.orEmpty())
                 
                 Log.d(TAG, "cleanupOrphanedAttachments: Found ${referencedPaths.size} referenced files")
 

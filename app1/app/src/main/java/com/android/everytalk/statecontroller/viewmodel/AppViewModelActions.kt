@@ -438,6 +438,7 @@ import java.util.TimeZone
         contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart> = emptyList(),
     ) {
         Log.d("AppViewModel", "onSendMessage: isImage=$isImageGeneration, attachments=${attachments.size}")
+        if (isRestoringMessage.value) return
         if (!isImageGeneration && stateHolder._isWebSearchEnabled.value) {
             val currentConfig = stateHolder._selectedApiConfig.value
             val supportsNative = com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(currentConfig)
@@ -449,6 +450,12 @@ import java.util.TimeZone
         // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
         val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
         val promptToUse = if (engaged) systemPrompt.value else null
+        val editedSession = messageEditSession.value?.takeIf {
+            it.belongsTo(
+                if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value else stateHolder._currentConversationId.value,
+                isImageGeneration,
+            )
+        }
         messageSender.sendMessage(
             messageText,
             isFromRegeneration,
@@ -458,6 +465,7 @@ import java.util.TimeZone
             systemPrompt = promptToUse,
             isImageGeneration = isImageGeneration,
             contentParts = contentParts,
+            onUserMessageAccepted = editedSession?.let { session -> { editMessageController.finishEditing(session) } },
         )
     }
 
@@ -947,28 +955,16 @@ import java.util.TimeZone
         }
     }
 
-    internal fun AppViewModel.onEditDialogTextChanged(newText: String) {
-        editMessageController.onEditDialogTextChanged(newText)
-    }
-
     internal fun AppViewModel.requestEditMessage(message: Message, isImageGeneration: Boolean = false) {
         editMessageController.requestEditMessage(message, isImageGeneration)
     }
 
-    internal fun AppViewModel.confirmMessageEdit() {
-        editMessageController.confirmMessageEdit()
+    internal fun AppViewModel.consumeRestoredMessageDraft(draft: com.android.everytalk.statecontroller.controller.conversation.MessageEditDraft) {
+        editMessageController.consumeRestoredDraft(draft)
     }
 
-    internal fun AppViewModel.confirmImageGenerationMessageEdit() {
-        editMessageController.confirmImageGenerationMessageEdit()
-    }
-
-    internal fun AppViewModel.dismissEditDialog() {
-        editMessageController.dismissEditDialog()
-    }
-
-    internal fun AppViewModel.cancelEditing() {
-        editMessageController.cancelEditing()
+    internal fun AppViewModel.restoreOriginalMessages(text: String, attachments: List<SelectedMediaItem>, contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart>? = null, isImageGeneration: Boolean = false) {
+        editMessageController.restoreOriginalMessages(text, attachments, contentParts, isImageGeneration)
     }
 
     internal fun AppViewModel.regenerateAiResponse(message: Message, isImageGeneration: Boolean = false, scrollToNewMessage: Boolean = false) {
@@ -1026,7 +1022,7 @@ import java.util.TimeZone
 
     internal fun AppViewModel.startNewChat() {
         if (isConversationSearchActive.value) setConversationSearchActive(false)
-        dismissEditDialog()
+        restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("开始新聊天")

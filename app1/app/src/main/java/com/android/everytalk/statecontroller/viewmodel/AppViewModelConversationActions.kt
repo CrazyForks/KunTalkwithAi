@@ -108,7 +108,7 @@ import java.util.TimeZone
 
     internal fun AppViewModel.startNewImageGeneration() {
         if (isConversationSearchActive.value) setConversationSearchActive(false)
-        dismissEditDialog()
+        restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("开始新的图像生成")
@@ -141,7 +141,7 @@ import java.util.TimeZone
         ) {
             return
         }
-        dismissEditDialog()
+        restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
         val historyBeforeSave = stateHolder._historicalConversations.value
@@ -189,7 +189,7 @@ import java.util.TimeZone
         ) {
             return
         }
-        dismissEditDialog()
+        restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("加载图像模式历史索引 $index", isNewMessageSend = false, isImageGeneration = true)
@@ -209,7 +209,7 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.clearAllConversations() {
-        dismissEditDialog()
+        restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
@@ -223,7 +223,7 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.clearAllImageGenerationConversations() {
-        dismissEditDialog()
+        restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有图像生成历史记录")
         historyController.clearAllConversations(isImageGeneration = true)

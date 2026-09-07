@@ -95,6 +95,7 @@ import java.util.concurrent.atomic.AtomicLong
     }
 
     val _text = MutableStateFlow("")
+    val messageEditSession = MutableStateFlow<com.android.everytalk.statecontroller.controller.conversation.MessageEditSession?>(null)
     val messages: SnapshotStateList<Message> = mutableStateListOf()
     val imageGenerationMessages: SnapshotStateList<Message> = mutableStateListOf()
 
@@ -313,7 +314,6 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _scrollToItemEvent =
         MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
 
-    val _editDialogInputText = MutableStateFlow("")
 
     val _showSettingsDialog = MutableStateFlow(false)
     

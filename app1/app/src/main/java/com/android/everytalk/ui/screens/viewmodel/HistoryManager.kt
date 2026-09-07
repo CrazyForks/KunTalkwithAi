@@ -249,6 +249,7 @@ class HistoryManager(
                                 command.isImageGeneration,
                             )
                             is HistoryCommand.Clear -> clearAllHistoryInternal(command.isImageGeneration)
+                            is HistoryCommand.Rewind -> rewindConversationInternal(command)
                         }
                         command.completion?.complete(Unit)
                     } catch (exception: CancellationException) {
@@ -291,6 +292,14 @@ class HistoryManager(
 
         data class Clear(
             val isImageGeneration: Boolean,
+            override val completion: CompletableDeferred<Unit>,
+        ) : HistoryCommand
+
+        data class Rewind(
+            val conversationId: String,
+            val messages: List<Message>,
+            val isImageGeneration: Boolean,
+            val sourceConversationId: String,
             override val completion: CompletableDeferred<Unit>,
         ) : HistoryCommand
     }
@@ -951,10 +960,40 @@ class HistoryManager(
         onHistoryModified()
     }
 
-    /**
-     * 直接持久化当前历史列表（不经过 filterMessagesForSaving）。
-     * 用于重命名等场景，确保包含标题消息的完整会话被保存。
-     */
+    /** 回退与自动保存共用串行队列，旧快照必须先落库，不能在回退之后复活旧消息。 */
+    suspend fun rewindConversation(conversationId: String, messages: List<Message>, isImageGeneration: Boolean, sourceConversationId: String = conversationId) {
+        cancelDebouncedSave(isImageGeneration)
+        enqueueAndAwait(HistoryCommand.Rewind(conversationId, messages, isImageGeneration, sourceConversationId, CompletableDeferred()))
+    }
+
+    private suspend fun rewindConversationInternal(command: HistoryCommand.Rewind) {
+        val history = if (command.isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
+        val conversation = if (command.isImageGeneration) stateHolder._currentImageGenerationConversationId else stateHolder._currentConversationId
+        val loadedIndex = if (command.isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex else stateHolder._loadedHistoryIndex
+        // 新会话可能仍使用临时 ID；回退首条消息后列表为空，不能再从列表推断归属。
+        fun isCurrentConversation(): Boolean =
+            conversation.value == command.conversationId || conversation.value == command.sourceConversationId
+        val index = history.value.indexOfFirst { stableConversationId(it) == command.conversationId }
+        val retained = history.value.getOrNull(index)?.let {
+            ConversationNameHelper.preserveStoredConversationTitle(it, command.messages)
+        } ?: command.messages
+        // 首条消息回退后也要覆盖空历史；不删除会话资源，更不能删除即将回填的附件。
+        persistenceManager.rewindHistorySession(command.conversationId, retained, command.isImageGeneration, isCurrentConversation())
+        history.value = history.value.toMutableList().apply {
+            if (index >= 0) {
+                if (command.messages.isEmpty()) removeAt(index) else set(index, retained)
+            } else if (command.messages.isNotEmpty()) {
+                // 编辑首条消息时历史项会移除，复原必须把该会话重新放回历史列表。
+                add(0, retained)
+            }
+        }
+        if (isCurrentConversation()) {
+            loadedIndex.value = if (command.messages.isEmpty()) null else index.coerceAtLeast(0)
+        }
+        onHistoryModified()
+    }
+
+    /** 直接持久化历史列表，保留标题等不属于聊天正文的元数据。 */
     suspend fun persistHistoryListDirectly(isImageGeneration: Boolean = false) {
         cancelDebouncedSave(isImageGeneration)
         enqueueAndAwait(
