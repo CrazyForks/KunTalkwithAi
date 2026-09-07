@@ -7,6 +7,8 @@ import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -109,6 +111,16 @@ class HistoryController(
     }
 
     private val messagesMutex = Mutex()
+    private var imageHistoryLoadJob: Job? = null
+    private var imageHistoryLoadGeneration = 0L
+
+    /** 离开、清空或重新选择时撤销旧加载；旧任务的 finally 不能关闭新任务的加载标记。 */
+    fun cancelPendingImageHistoryLoad() {
+        imageHistoryLoadGeneration++
+        imageHistoryLoadJob?.cancel()
+        imageHistoryLoadJob = null
+        stateHolder._isLoadingImageHistory.value = false
+    }
 
     fun getConversationFullText(index: Int, isImageGeneration: Boolean): String {
         val conversationList = if (isImageGeneration) {
@@ -207,27 +219,24 @@ class HistoryController(
     }
 
     fun loadImageHistory(index: Int) {
-        scope.launch {
-            stateHolder._isLoadingImageHistory.value = true
+        val previousJob = imageHistoryLoadJob
+        cancelPendingImageHistoryLoad()
+        val generation = imageHistoryLoadGeneration
+        stateHolder._isLoadingImageHistory.value = true
+        imageHistoryLoadJob = scope.launch {
             stateHolder._lastSentImageUserMessageId.value = null
             try {
+                previousJob?.cancelAndJoin()
                 simpleModeSwitcher.loadImageHistory(index)
-                val loadedMessages = stateHolder.imageGenerationMessages.toList()
-                val sessionId = stateHolder._currentImageGenerationConversationId.value
-                val repaired = withContext(Dispatchers.Default) {
-                    prepareLoadedHistoryMessages(loadedMessages, sessionId)
-                }
-                if (loadedMessages != repaired) {
-                    stateHolder.imageGenerationMessages.clear()
-                    stateHolder.imageGenerationMessages.addAll(repaired)
-                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e("HistoryController", "IMAGE ERROR", e)
                 showSnackbar("加载图像历史失败: ${e.message}")
             } finally {
-                stateHolder._isLoadingImageHistory.value = false
+                if (generation == imageHistoryLoadGeneration) {
+                    stateHolder._isLoadingImageHistory.value = false
+                }
             }
         }
     }

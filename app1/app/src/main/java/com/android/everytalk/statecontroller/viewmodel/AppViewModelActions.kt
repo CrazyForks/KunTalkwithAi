@@ -1021,6 +1021,7 @@ import java.util.TimeZone
 
 
     internal fun AppViewModel.startNewChat() {
+        historyController.cancelPendingImageHistoryLoad()
         if (isConversationSearchActive.value) setConversationSearchActive(false)
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()

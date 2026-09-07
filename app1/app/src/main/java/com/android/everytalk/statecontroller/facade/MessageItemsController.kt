@@ -643,6 +643,7 @@ open class MessageItemsController(
                 message = message,
                 state = state,
                 reasoningComplete = reasoningComplete,
+                allowLazyStaticRender = allowLazyStaticRender,
             )
         }
 
@@ -799,6 +800,7 @@ open class MessageItemsController(
         message: Message,
         state: com.android.everytalk.ui.state.AiBubbleState,
         reasoningComplete: Boolean,
+        allowLazyStaticRender: Boolean,
     ): List<ChatListItem> {
         val segments = orderedAiOutputSegments(message.executionTrace).toMutableList()
         val replyIsStreaming = state is com.android.everytalk.ui.state.AiBubbleState.Connecting ||
@@ -869,21 +871,55 @@ open class MessageItemsController(
                             timestamp = message.timestamp,
                             outputType = message.outputType,
                         )
-                        add(
-                            ChatListItem.AiMessageContentSegment(
-                                sourceMessageId = message.id,
-                                message = segmentMessage,
+                        val contentItem = ChatListItem.AiMessageContentSegment(
+                            sourceMessageId = message.id,
+                            message = segmentMessage,
+                            segmentIndex = segmentIndex,
+                            text = segment.text,
+                            isStreaming = isStreamingSegment,
+                            renderState = orderedSegmentRenderState(
+                                messageId = message.id,
                                 segmentIndex = segmentIndex,
                                 text = segment.text,
                                 isStreaming = isStreamingSegment,
-                                renderState = orderedSegmentRenderState(
-                                    messageId = message.id,
-                                    segmentIndex = segmentIndex,
-                                    text = segment.text,
-                                    isStreaming = isStreamingSegment,
+                            ),
+                        )
+                        // 仅历史回复使用静态分块。当前 Run 刚结束时继续保留原组件和滚动位置。
+                        val preparation = if (allowLazyStaticRender && !replyIsStreaming) {
+                            prepareStaticAiRender(
+                                segmentMessage,
+                                StreamBlockParser.ParseResult(
+                                    blocks = contentItem.renderState.blocks,
+                                    hasPendingMath = contentItem.renderState.hasPendingMath,
+                                    blocksHash = contentItem.renderState.blocksHash,
                                 ),
                             )
-                        )
+                        } else null
+                        val staticBlocks = preparation?.let { prepared ->
+                            expandStaticAiMessageItem(
+                                ChatListItem.AiMessage(
+                                    message = segmentMessage,
+                                    messageId = segmentMessage.id,
+                                    text = segment.text,
+                                    hasReasoning = false,
+                                    pageSources = prepared.pageSources,
+                                    preparedMessage = prepared.preparedMessage,
+                                    preparedMarkdownDocument = prepared.preparedMarkdownDocument,
+                                ),
+                            ).filterIsInstance<ChatListItem.AiMarkdownNode>()
+                        }.orEmpty()
+                        if (staticBlocks.isEmpty()) {
+                            add(contentItem)
+                        } else {
+                            staticBlocks.forEach { block ->
+                                add(
+                                    contentItem.copy(
+                                        staticBlock = block,
+                                        staticPageSources = if (block.isFirstNode) preparation?.pageSources.orEmpty() else emptyList(),
+                                    ),
+                                )
+                            }
+                        }
                     }
                     is OrderedAiOutputSegment.Process -> {
                         // 旧消息没有分段时间。只有整条回复仅含一个过程段时，才沿用旧的总耗时；

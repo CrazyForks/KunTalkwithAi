@@ -36,6 +36,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.net.URI
 import java.nio.file.Files
+import androidx.compose.runtime.snapshots.Snapshot
 
 internal fun DataPersistenceManager.loadInitialDataInternal(
         loadLastChat: Boolean = true,
@@ -466,41 +467,40 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                         warnOnce("部分历史加载失败，原数据已保留")
                     }
 
+                    // 此处仍在 IO 协程：先过滤消息并建立推理状态表，主线程只批量提交结果。
+                    val visibleTextMessages = lastOpenChat?.let(ConversationNameHelper::withoutStoredConversationTitle)
+                    val visibleImageMessages = lastOpenImageGenChat?.let(ConversationNameHelper::withoutStoredConversationTitle)
+                    val textReasoningStates = visibleTextMessages.orEmpty().asSequence()
+                        .filter { it.sender == com.android.everytalk.data.DataClass.Sender.AI && !it.reasoning.isNullOrBlank() }
+                        .associate { it.id to true }
+                    val imageReasoningStates = visibleImageMessages.orEmpty().asSequence()
+                        .filter { it.sender == com.android.everytalk.data.DataClass.Sender.AI && !it.reasoning.isNullOrBlank() }
+                        .associate { it.id to true }
+                    val textSessionId = ConversationNameHelper.resolveStableId(lastOpenChat)
+                    val imageSessionId = ConversationNameHelper.resolveStableId(lastOpenImageGenChat)
                     withContext(Dispatchers.Main.immediate) {
-                        lastOpenChat?.let { loadedMessages ->
-                            val visibleMessages = ConversationNameHelper.withoutStoredConversationTitle(loadedMessages)
-                            stateHolder.messages.clear()
-                            stateHolder.messages.addAll(visibleMessages)
-                            stateHolder.textReasoningCompleteMap.clear()
-                            visibleMessages.forEach { message ->
-                                if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-                                    !message.reasoning.isNullOrBlank()
-                                ) {
-                                    stateHolder.textReasoningCompleteMap[message.id] = true
-                                }
+                        Snapshot.withMutableSnapshot {
+                            visibleTextMessages?.let { visibleMessages ->
+                                stateHolder.messages.clear()
+                                stateHolder.messages.addAll(visibleMessages)
+                                stateHolder.textReasoningCompleteMap.clear()
+                                stateHolder.textReasoningCompleteMap.putAll(textReasoningStates)
+                                stateHolder._currentConversationId.value =
+                                    textSessionId
+                                        ?: "new_chat_${System.currentTimeMillis()}"
+                                stateHolder.applyCurrentConversationFunctionToggleState()
+                                stateHolder._loadedHistoryIndex.value = null
                             }
-                            stateHolder._currentConversationId.value =
-                                ConversationNameHelper.resolveStableId(loadedMessages)
-                                    ?: "new_chat_${System.currentTimeMillis()}"
-                            stateHolder.applyCurrentConversationFunctionToggleState()
-                            stateHolder._loadedHistoryIndex.value = null
-                        }
-                        lastOpenImageGenChat?.let { loadedMessages ->
-                            val visibleMessages = ConversationNameHelper.withoutStoredConversationTitle(loadedMessages)
-                            stateHolder.imageGenerationMessages.clear()
-                            stateHolder.imageGenerationMessages.addAll(visibleMessages)
-                            stateHolder.imageReasoningCompleteMap.clear()
-                            visibleMessages.forEach { message ->
-                                if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-                                    !message.reasoning.isNullOrBlank()
-                                ) {
-                                    stateHolder.imageReasoningCompleteMap[message.id] = true
-                                }
+                            visibleImageMessages?.let { visibleMessages ->
+                                stateHolder.imageGenerationMessages.clear()
+                                stateHolder.imageGenerationMessages.addAll(visibleMessages)
+                                stateHolder.imageReasoningCompleteMap.clear()
+                                stateHolder.imageReasoningCompleteMap.putAll(imageReasoningStates)
+                                stateHolder._currentImageGenerationConversationId.value =
+                                    imageSessionId
+                                        ?: "image_resume_${System.currentTimeMillis()}"
+                                stateHolder._loadedImageGenerationHistoryIndex.value = null
                             }
-                            stateHolder._currentImageGenerationConversationId.value =
-                                ConversationNameHelper.resolveStableId(loadedMessages)
-                                    ?: "image_resume_${System.currentTimeMillis()}"
-                            stateHolder._loadedImageGenerationHistoryIndex.value = null
                         }
                     }
                     Log.i(

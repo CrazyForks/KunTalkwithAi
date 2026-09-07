@@ -83,6 +83,30 @@ private const val NAVIGATION_ROUTE_WAIT_TIMEOUT_MS = 1_000L
 private const val TRIM_MEMORY_RUNNING_LOW_LEVEL = 10
 private const val SHARED_TEXT_TOO_LARGE_MESSAGE = "分享文本过大（最大 256KB）"
 
+/**
+ * 首次打开前只保留抽屉宽度，避免冷启动同时创建屏幕外的历史列表。
+ * 拖动开始、点击打开或恢复为打开状态时立即挂载；之后保持内容，关闭动画和对话框不受影响。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun DeferredDrawerContent(drawerState: DrawerState, content: @Composable () -> Unit) {
+    var mounted by remember(drawerState) { mutableStateOf(false) }
+    val widthPx = with(LocalDensity.current) { defaultDrawerWidth.toPx() }
+    val opening by remember(drawerState, widthPx) {
+        derivedStateOf {
+            drawerState.currentValue != DrawerValue.Closed ||
+                drawerState.targetValue != DrawerValue.Closed ||
+                (drawerState.currentOffset.isFinite() && drawerState.currentOffset > -widthPx + 1f)
+        }
+    }
+    if (mounted || opening) {
+        SideEffect { mounted = true }
+        content()
+    } else {
+        Spacer(Modifier.width(defaultDrawerWidth).fillMaxHeight())
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun rememberDrawerSessionKey(drawerState: DrawerState): Int {
@@ -230,58 +254,176 @@ class MainActivity : AppCompatActivity() {
                                 .fillMaxSize()
                                 .padding(contentPadding),
                             drawerContent = {
-                                val navBackStackEntryState = navController.currentBackStackEntryAsState()
-                                val currentRoute = navBackStackEntryState.value?.destination?.route
-                                val isImageGenerationMode = currentRoute == Screen.IMAGE_GENERATION_SCREEN
+                                DeferredDrawerContent(appViewModel.drawerState) {
+                                    val navBackStackEntryState = navController.currentBackStackEntryAsState()
+                                    val currentRoute = navBackStackEntryState.value?.destination?.route
+                                    val isImageGenerationMode = currentRoute == Screen.IMAGE_GENERATION_SCREEN
 
-                                suspend fun waitForRoute(route: String) {
-                                    withTimeoutOrNull(NAVIGATION_ROUTE_WAIT_TIMEOUT_MS) {
-                                        snapshotFlow { navBackStackEntryState.value?.destination?.route }
-                                            .filter { it == route }
-                                            .first()
+                                    suspend fun waitForRoute(route: String) {
+                                        withTimeoutOrNull(NAVIGATION_ROUTE_WAIT_TIMEOUT_MS) {
+                                            snapshotFlow { navBackStackEntryState.value?.destination?.route }
+                                                .filter { it == route }
+                                                .first()
+                                        }
                                     }
-                                }
 
-                                LaunchedEffect(drawerSessionKey, isImageGenerationMode) {
-                                    if (drawerSessionKey > 0 && expandedDrawerItemIndex != null) {
-                                        appViewModel.setExpandedDrawerItemIndex(null)
+                                    LaunchedEffect(drawerSessionKey, isImageGenerationMode) {
+                                        if (drawerSessionKey > 0 && expandedDrawerItemIndex != null) {
+                                            appViewModel.setExpandedDrawerItemIndex(null)
+                                        }
                                     }
-                                }
-                                
-                                // 置顶集合状态
-                                val pinnedIds = if (isImageGenerationMode) {
-                                    appViewModel.stateHolder.pinnedImageConversationIds.collectAsState().value
-                                } else {
-                                    appViewModel.stateHolder.pinnedTextConversationIds.collectAsState().value
-                                }
 
-                                key(drawerSessionKey, isImageGenerationMode) {
-                                    AppDrawerContent(
-                                        historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
-                                        loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
-                                        onConversationSearchClick = {
-                                            appViewModel.simpleModeManager.setIntendedMode(
-                                                SimpleModeManager.ModeType.TEXT,
-                                                showToast = false,
-                                            )
-                                            appViewModel.setConversationSearchActive(true)
-                                            navController.navigate(Screen.CHAT_SCREEN) {
-                                                popUpTo(navController.graph.startDestinationRoute!!) {
-                                                    saveState = true
+                                    // 置顶集合状态
+                                    val pinnedIds = if (isImageGenerationMode) {
+                                        appViewModel.stateHolder.pinnedImageConversationIds.collectAsState().value
+                                    } else {
+                                        appViewModel.stateHolder.pinnedTextConversationIds.collectAsState().value
+                                    }
+
+                                    key(drawerSessionKey, isImageGenerationMode) {
+                                        AppDrawerContent(
+                                            historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
+                                            loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
+                                            onConversationSearchClick = {
+                                                appViewModel.simpleModeManager.setIntendedMode(
+                                                    SimpleModeManager.ModeType.TEXT,
+                                                    showToast = false,
+                                                )
+                                                appViewModel.setConversationSearchActive(true)
+                                                navController.navigate(Screen.CHAT_SCREEN) {
+                                                    popUpTo(navController.graph.startDestinationRoute!!) {
+                                                        saveState = true
+                                                    }
+                                                    launchSingleTop = true
+                                                    restoreState = true
                                                 }
+                                                coroutineScope.launch {
+                                                    appViewModel.drawerState.close()
+                                                }
+                                            },
+                                            onImageGenerationConversationClick = { index ->
+                                            // 先声明意图模式，避免因内容/索引造成的误判
+                                            // 跨模式点击时显示 Toast 提示
+                                            appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
+                                            // 跨模式点击时，先跳转到图像生成页
+                                            if (!isImageGenerationMode) {
+                                                navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
+                                                    popUpTo(navController.graph.startDestinationRoute!!) {
+                                                        saveState = true
+                                                    }
+                                                    launchSingleTop = true
+                                                    restoreState = true
+                                                }
+                                                coroutineScope.launch {
+                                                    // 等待目标 route 生效，超时后仍加载以避免操作卡住。
+                                                    waitForRoute(Screen.IMAGE_GENERATION_SCREEN)
+                                                    // 🔥 修复：不清除文本模式索引，保持两个模式独立
+                                                    // appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                                    appViewModel.loadImageGenerationConversationFromHistory(index)
+                                                    appViewModel.drawerState.close()
+                                                }
+                                            } else {
+                                                // 同模式内点击，直接加载
+                                                // 🔥 修复：不清除文本模式索引，保持两个模式独立
+                                                // appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                                appViewModel.loadImageGenerationConversationFromHistory(index)
+                                                coroutineScope.launch { appViewModel.drawerState.close() }
+                                            }
+                                        },
+                                        onConversationClick = { index ->
+                                            // 先声明意图模式，避免因内容/索引造成的误判
+                                            // 跨模式点击时显示 Toast 提示
+                                            appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT, showToast = isImageGenerationMode)
+                                            // 跨模式点击时，先跳转到文本聊天页
+                                            if (isImageGenerationMode) {
+                                                navController.navigate(Screen.CHAT_SCREEN) {
+                                                    popUpTo(navController.graph.startDestinationRoute!!) {
+                                                        saveState = true
+                                                    }
+                                                    launchSingleTop = true
+                                                    restoreState = true
+                                                }
+                                                coroutineScope.launch {
+                                                    // 等待目标 route 生效，超时后仍加载以避免操作卡住。
+                                                    waitForRoute(Screen.CHAT_SCREEN)
+                                                    // 🔥 修复：不清除图像模式索引，保持两个模式独立
+                                                    // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                                    appViewModel.loadConversationFromHistory(index)
+                                                    appViewModel.drawerState.close()
+                                                }
+                                            } else {
+                                                // 同模式内点击，直接加载
+                                                // 🔥 修复：不清除图像模式索引，保持两个模式独立
+                                                // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                                appViewModel.loadConversationFromHistory(index)
+                                                coroutineScope.launch { appViewModel.drawerState.close() }
+                                            }
+                                        },
+                                        onNewChatClick = {
+                                            if (isImageGenerationMode) {
+                                                // 从图像模式切换到文本模式，显示 Toast
+                                                appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT, showToast = true)
+                                                coroutineScope.launch { appViewModel.drawerState.close() }
+                                                // 🔥 修复：不清除图像模式索引，保持两个模式独立
+                                                // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                                navController.navigate(Screen.CHAT_SCREEN) {
+                                                    popUpTo(navController.graph.startDestinationRoute!!) {
+                                                        saveState = true
+                                                    }
+                                                    launchSingleTop = true
+                                                    restoreState = true
+                                                }
+                                                appViewModel.startNewChat()
+                                            } else {
+                                                appViewModel.startNewChat()
+                                            }
+                                            coroutineScope.launch { appViewModel.drawerState.close() }
+                                        },
+                                        onRenameRequest = { index, newName ->
+                                            appViewModel.renameConversation(
+                                                index,
+                                                newName,
+                                                isImageGeneration = isImageGenerationMode
+                                            )
+                                        },
+                                        onDeleteRequest = { index ->
+                                            if (isImageGenerationMode) {
+                                                appViewModel.deleteImageGenerationConversation(index)
+                                            } else {
+                                                appViewModel.deleteConversation(index)
+                                            }
+                                        },
+                                        onClearAllConversationsRequest = appViewModel::clearAllConversations,
+                                        onClearAllImageGenerationConversationsRequest = appViewModel::clearAllImageGenerationConversations,
+                                        showClearImageHistoryDialog = appViewModel.showClearImageHistoryDialog.collectAsState().value,
+                                        onShowClearImageHistoryDialog = appViewModel::showClearImageHistoryDialog,
+                                        onDismissClearImageHistoryDialog = appViewModel::dismissClearImageHistoryDialog,
+                                        getPreviewForIndex = { index ->
+                                            appViewModel.getConversationPreviewText(
+                                                index,
+                                                isImageGenerationMode
+                                            )
+                                        },
+                                        getFullTextForIndex = { index ->
+                                            appViewModel.getConversationFullText(
+                                                index,
+                                                isImageGenerationMode
+                                            )
+                                        },
+                                        onAppInfoClick = {
+                                            navController.navigate(Screen.APP_INFO_SCREEN) {
                                                 launchSingleTop = true
-                                                restoreState = true
                                             }
                                             coroutineScope.launch {
                                                 appViewModel.drawerState.close()
                                             }
                                         },
-                                        onImageGenerationConversationClick = { index ->
-                                        // 先声明意图模式，避免因内容/索引造成的误判
-                                        // 跨模式点击时显示 Toast 提示
-                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
-                                        // 跨模式点击时，先跳转到图像生成页
-                                        if (!isImageGenerationMode) {
+                                        onImageGenerationClick = {
+                                            // 从文本模式切换到图像模式，显示 Toast
+                                            appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
+                                            coroutineScope.launch { appViewModel.drawerState.close() }
+                                            // 🔥 修复：不清除文本模式索引，保持两个模式独立
+                                            // appViewModel.stateHolder._loadedHistoryIndex.value = null
                                             navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
                                                 popUpTo(navController.graph.startDestinationRoute!!) {
                                                     saveState = true
@@ -289,146 +431,30 @@ class MainActivity : AppCompatActivity() {
                                                 launchSingleTop = true
                                                 restoreState = true
                                             }
-                                            coroutineScope.launch {
-                                                // 等待目标 route 生效，超时后仍加载以避免操作卡住。
-                                                waitForRoute(Screen.IMAGE_GENERATION_SCREEN)
-                                                // 🔥 修复：不清除文本模式索引，保持两个模式独立
-                                                // appViewModel.stateHolder._loadedHistoryIndex.value = null
-                                                appViewModel.loadImageGenerationConversationFromHistory(index)
-                                                appViewModel.drawerState.close()
-                                            }
-                                        } else {
-                                            // 同模式内点击，直接加载
-                                            // 🔥 修复：不清除文本模式索引，保持两个模式独立
-                                            // appViewModel.stateHolder._loadedHistoryIndex.value = null
-                                            appViewModel.loadImageGenerationConversationFromHistory(index)
-                                            coroutineScope.launch { appViewModel.drawerState.close() }
+                                            appViewModel.startNewImageGeneration()
+                                        },
+                                        isLoadingHistoryData = isLoadingHistoryData,
+                                        isImageGenerationMode = isImageGenerationMode,
+                                        expandedItemIndex = expandedDrawerItemIndex,
+                                        onExpandItem = { index -> appViewModel.setExpandedDrawerItemIndex(index) },
+                                        pinnedIds = pinnedIds,
+                                        onTogglePin = { index ->
+                                            appViewModel.togglePinForConversation(index, isImageGenerationMode)
+                                        },
+                                        conversationGroups = appViewModel.stateHolder.conversationGroups.collectAsState().value,
+                                        onCreateGroup = { groupName -> appViewModel.createGroup(groupName) },
+                                        onRenameGroup = { oldName, newName -> appViewModel.renameGroup(oldName, newName) },
+                                        onDeleteGroup = { groupName -> appViewModel.deleteGroup(groupName) },
+                                        onMoveConversationToGroup = { index, groupName, isImageGen -> appViewModel.moveConversationToGroup(index, groupName, isImageGen) },
+                                        expandedGroups = appViewModel.stateHolder.expandedGroups.collectAsState().value,
+                                        onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) },
+                                        isGroupSectionExpanded = appViewModel.stateHolder.isGroupSectionExpanded.collectAsState().value,
+                                        onToggleGroupSection = { appViewModel.toggleGroupSectionExpanded() },
+                                        onShareConversation = { index ->
+                                            appViewModel.shareConversation(index, isImageGenerationMode)
                                         }
-                                    },
-                                    onConversationClick = { index ->
-                                        // 先声明意图模式，避免因内容/索引造成的误判
-                                        // 跨模式点击时显示 Toast 提示
-                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT, showToast = isImageGenerationMode)
-                                        // 跨模式点击时，先跳转到文本聊天页
-                                        if (isImageGenerationMode) {
-                                            navController.navigate(Screen.CHAT_SCREEN) {
-                                                popUpTo(navController.graph.startDestinationRoute!!) {
-                                                    saveState = true
-                                                }
-                                                launchSingleTop = true
-                                                restoreState = true
-                                            }
-                                            coroutineScope.launch {
-                                                // 等待目标 route 生效，超时后仍加载以避免操作卡住。
-                                                waitForRoute(Screen.CHAT_SCREEN)
-                                                // 🔥 修复：不清除图像模式索引，保持两个模式独立
-                                                // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
-                                                appViewModel.loadConversationFromHistory(index)
-                                                appViewModel.drawerState.close()
-                                            }
-                                        } else {
-                                            // 同模式内点击，直接加载
-                                            // 🔥 修复：不清除图像模式索引，保持两个模式独立
-                                            // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
-                                            appViewModel.loadConversationFromHistory(index)
-                                            coroutineScope.launch { appViewModel.drawerState.close() }
-                                        }
-                                    },
-                                    onNewChatClick = {
-                                        if (isImageGenerationMode) {
-                                            // 从图像模式切换到文本模式，显示 Toast
-                                            appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT, showToast = true)
-                                            coroutineScope.launch { appViewModel.drawerState.close() }
-                                            // 🔥 修复：不清除图像模式索引，保持两个模式独立
-                                            // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
-                                            navController.navigate(Screen.CHAT_SCREEN) {
-                                                popUpTo(navController.graph.startDestinationRoute!!) {
-                                                    saveState = true
-                                                }
-                                                launchSingleTop = true
-                                                restoreState = true
-                                            }
-                                            appViewModel.startNewChat()
-                                        } else {
-                                            appViewModel.startNewChat()
-                                        }
-                                        coroutineScope.launch { appViewModel.drawerState.close() }
-                                    },
-                                    onRenameRequest = { index, newName ->
-                                        appViewModel.renameConversation(
-                                            index,
-                                            newName,
-                                            isImageGeneration = isImageGenerationMode
                                         )
-                                    },
-                                    onDeleteRequest = { index ->
-                                        if (isImageGenerationMode) {
-                                            appViewModel.deleteImageGenerationConversation(index)
-                                        } else {
-                                            appViewModel.deleteConversation(index)
-                                        }
-                                    },
-                                    onClearAllConversationsRequest = appViewModel::clearAllConversations,
-                                    onClearAllImageGenerationConversationsRequest = appViewModel::clearAllImageGenerationConversations,
-                                    showClearImageHistoryDialog = appViewModel.showClearImageHistoryDialog.collectAsState().value,
-                                    onShowClearImageHistoryDialog = appViewModel::showClearImageHistoryDialog,
-                                    onDismissClearImageHistoryDialog = appViewModel::dismissClearImageHistoryDialog,
-                                    getPreviewForIndex = { index ->
-                                        appViewModel.getConversationPreviewText(
-                                            index,
-                                            isImageGenerationMode
-                                        )
-                                    },
-                                    getFullTextForIndex = { index ->
-                                        appViewModel.getConversationFullText(
-                                            index,
-                                            isImageGenerationMode
-                                        )
-                                    },
-                                    onAppInfoClick = {
-                                        navController.navigate(Screen.APP_INFO_SCREEN) {
-                                            launchSingleTop = true
-                                        }
-                                        coroutineScope.launch {
-                                            appViewModel.drawerState.close()
-                                        }
-                                    },
-                                    onImageGenerationClick = {
-                                        // 从文本模式切换到图像模式，显示 Toast
-                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
-                                        coroutineScope.launch { appViewModel.drawerState.close() }
-                                        // 🔥 修复：不清除文本模式索引，保持两个模式独立
-                                        // appViewModel.stateHolder._loadedHistoryIndex.value = null
-                                        navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
-                                            popUpTo(navController.graph.startDestinationRoute!!) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                        appViewModel.startNewImageGeneration()
-                                    },
-                                    isLoadingHistoryData = isLoadingHistoryData,
-                                    isImageGenerationMode = isImageGenerationMode,
-                                    expandedItemIndex = expandedDrawerItemIndex,
-                                    onExpandItem = { index -> appViewModel.setExpandedDrawerItemIndex(index) },
-                                    pinnedIds = pinnedIds,
-                                    onTogglePin = { index ->
-                                        appViewModel.togglePinForConversation(index, isImageGenerationMode)
-                                    },
-                                    conversationGroups = appViewModel.stateHolder.conversationGroups.collectAsState().value,
-                                    onCreateGroup = { groupName -> appViewModel.createGroup(groupName) },
-                                    onRenameGroup = { oldName, newName -> appViewModel.renameGroup(oldName, newName) },
-                                    onDeleteGroup = { groupName -> appViewModel.deleteGroup(groupName) },
-                                    onMoveConversationToGroup = { index, groupName, isImageGen -> appViewModel.moveConversationToGroup(index, groupName, isImageGen) },
-                                    expandedGroups = appViewModel.stateHolder.expandedGroups.collectAsState().value,
-                                    onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) },
-                                    isGroupSectionExpanded = appViewModel.stateHolder.isGroupSectionExpanded.collectAsState().value,
-                                    onToggleGroupSection = { appViewModel.toggleGroupSectionExpanded() },
-                                    onShareConversation = { index ->
-                                        appViewModel.shareConversation(index, isImageGenerationMode)
                                     }
-                                    )
                                 }
                             }
                         ) {

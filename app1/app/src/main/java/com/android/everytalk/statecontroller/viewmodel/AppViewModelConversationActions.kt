@@ -107,6 +107,7 @@ import java.util.TimeZone
 
 
     internal fun AppViewModel.startNewImageGeneration() {
+        historyController.cancelPendingImageHistoryLoad()
         if (isConversationSearchActive.value) setConversationSearchActive(false)
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
@@ -132,6 +133,7 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.loadConversationFromHistory(index: Int) {
+        historyController.cancelPendingImageHistoryLoad()
         if (isConversationSearchActive.value) setConversationSearchActive(false)
         if (shouldSkipReloadingLoadedHistory(
                 requestedIndex = index,
@@ -187,6 +189,8 @@ import java.util.TimeZone
                 hasLoadedMessages = stateHolder.imageGenerationMessages.isNotEmpty(),
             )
         ) {
+            // 等待另一条历史时重新选中当前会话，表示留在当前页，应撤销正在读取的目标。
+            historyController.cancelPendingImageHistoryLoad()
             return
         }
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
@@ -203,6 +207,7 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.deleteImageGenerationConversation(indexToDelete: Int) {
+        historyController.cancelPendingImageHistoryLoad()
         historyController.deleteConversation(indexToDelete, isImageGeneration = true)
         // 删除后清理置顶集合中已不存在的会话ID
         cleanupPinnedIds(isImageGeneration = true)
@@ -223,6 +228,7 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.clearAllImageGenerationConversations() {
+        historyController.cancelPendingImageHistoryLoad()
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有图像生成历史记录")

@@ -19,6 +19,42 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import com.android.everytalk.data.DataClass.Message
+
+/** 后台整理的完整结果；界面一次提交正文和状态表，不暴露未修复的中间消息。 */
+internal data class PreparedImageHistory(
+    val messages: List<Message>,
+    val reasoningCompleteStates: Map<String, Boolean>,
+    val animationPlayedStates: Map<String, Boolean>,
+)
+
+internal suspend fun prepareImageHistory(messages: List<Message>, sessionId: String): PreparedImageHistory =
+    withContext(Dispatchers.Default) {
+        val recovered = ConversationNameHelper.withoutStoredConversationTitle(messages).map { message ->
+            currentCoroutineContext().ensureActive()
+            val hasImages = !message.imageUrls.isNullOrEmpty()
+            val text = if (message.sender == Sender.AI && hasImages && message.text.isBlank() && message.parts.isNotEmpty()) {
+                message.parts.toRecoveredMarkdown().ifBlank { message.text }
+            } else message.text
+            message.copy(
+                text = text,
+                contentStarted = text.isNotBlank() || !message.reasoning.isNullOrBlank() || message.isError || hasImages,
+            )
+        }
+        val prepared = prepareLoadedHistoryMessages(recovered, sessionId)
+        currentCoroutineContext().ensureActive()
+        PreparedImageHistory(
+            messages = prepared,
+            reasoningCompleteStates = prepared.asSequence()
+                .filter { it.sender == Sender.AI && !it.reasoning.isNullOrBlank() }
+                .associate { it.id to true },
+            animationPlayedStates = prepared.asSequence()
+                .filter { it.contentStarted || it.isError || (it.sender == Sender.AI && !it.reasoning.isNullOrBlank()) }
+                .associate { it.id to true },
+        )
+    }
 
 /**
  * 简化的模式管理器 - 专门解决模式切换问题
@@ -35,6 +71,8 @@ class SimpleModeManager(
     // 增加明确的模式状态跟踪 - 解决forceNew导致的状态清空问题
     private var _currentMode: ModeType = ModeType.NONE
     private var _lastModeSwitch: Long = 0L
+    // 自动回填也会直接加载历史，因此在公共入口区分先后请求，不能只依赖控制器取消。
+    private var imageHistoryRequestGeneration = 0L
 
     // 新增：用于UI即时感知的"意图模式"（优先于内容态）
     private val _uiMode: MutableStateFlow<ModeType> = MutableStateFlow(ModeType.NONE)
@@ -420,123 +458,62 @@ class SimpleModeManager(
      * 安全的历史记录加载 - 图像模式
      */
     suspend fun loadImageHistory(index: Int) {
+        val requestGeneration = ++imageHistoryRequestGeneration
         Log.d(TAG, "Loading IMAGE history at index: $index")
         // 保证 UI 意图模式立即切换为 IMAGE，避免与文本模式的选择状态互相干扰
         _uiMode.value = ModeType.IMAGE
 
-        // 关键修复：与 TEXT 历史加载保持一致，这里不再强制保存任一模式的当前会话
-        // - 避免在仅浏览图像历史时，意外修改文本模式的 last-open / 历史索引
-        // - 图像会话如需保存，应由模式切换或显式操作路径负责
-        // if (stateHolder.imageGenerationMessages.isNotEmpty()) {
-        //     withContext(Dispatchers.IO) {
-        //         historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = false)
-        //     }
-        // }
-        
-        // 2. 验证索引
         val conversationList = stateHolder._imageGenerationHistoricalConversations.value
-        if (index < 0 || index >= conversationList.size) {
-            Log.e(TAG, "Invalid IMAGE history index: $index (size: ${conversationList.size})")
-            return
-        }
-        
-        // 3. 清理图像模式状态
-        clearImageApiState()
-        
-        // 关键修复：不清除文本模式索引，保持两个模式的历史索引独立
-        // stateHolder._loadedHistoryIndex.value = null  // 删除这行，保持文本模式索引不变
-        // 保留文本消息（不在加载图像历史时清空）
-        Log.d(TAG, "Preserved text messages (${stateHolder.messages.size} messages).")
-        
-        // 清理图像模式状态（仅清除加载索引，不清空消息）
-        stateHolder._loadedImageGenerationHistoryIndex.value = null
-        
-        // 4. 加载历史对话
-        val previewConversation = conversationList[index]
-        val previewStableId = ConversationNameHelper.resolveStableId(previewConversation)
-            ?: "image_history_${UUID.randomUUID()}"
-        val conversationToLoad = loadHistorySession(previewStableId) ?: previewConversation
-        if (conversationToLoad !== previewConversation) {
-            withContext(Dispatchers.Main.immediate) {
-                stateHolder._imageGenerationHistoricalConversations.value = conversationList.toMutableList().apply {
-                    this[index] = conversationToLoad
-                }
+        val preview = conversationList.getOrNull(index) ?: return
+        val sourceConversationId = stateHolder._currentImageGenerationConversationId.value
+        val requestedId = ConversationNameHelper.resolveStableId(preview) ?: return
+        // 读取、恢复正文和修复 parts 全部完成前保留原对话；加载失败也不会丢掉当前页面。
+        val loaded = loadHistorySession(requestedId) ?: preview
+        val prepared = prepareImageHistory(loaded, requestedId)
+
+        withContext(Dispatchers.Main.immediate) {
+            currentCoroutineContext().ensureActive()
+            // 加载期间新建/切换了会话，或者目标已删除时，不提交过时结果。
+            if (requestGeneration != imageHistoryRequestGeneration ||
+                _uiMode.value != ModeType.IMAGE ||
+                stateHolder._currentImageGenerationConversationId.value != sourceConversationId
+            ) {
+                return@withContext
             }
-        }
-        
-        // 5. 设置对话ID（必须在消息加载前设置）
-        val stableId = ConversationNameHelper.resolveStableId(conversationToLoad)
-            ?: "image_history_${UUID.randomUUID()}"
-        stateHolder._currentImageGenerationConversationId.value = stableId
-        stateHolder.applyCurrentImageConversationFunctionToggleState()
-        
-        // 🔧 修复：恢复会话使用的图像生成配置
-        val savedConfigId = stateHolder.conversationApiConfigIds.value[stableId]
-        if (savedConfigId != null) {
-            val config = stateHolder._imageGenApiConfigs.value.find { it.id == savedConfigId }
-            if (config != null) {
-                stateHolder._selectedImageGenApiConfig.value = config
-                Log.d(TAG, "Restored selected image gen config: ${safeApiConfigSummary(config)}")
-            } else {
-                // 如果找不到绑定的配置（可能被删除），则清空当前选择，避免串台
-                stateHolder._selectedImageGenApiConfig.value = null
-                Log.w(TAG, "Saved image config ID $savedConfigId not found in current configs. Cleared selection.")
+            val latestHistory = stateHolder._imageGenerationHistoricalConversations.value
+            val latestIndex = latestHistory.indexOfFirst { ConversationNameHelper.resolveStableId(it) == requestedId }
+            if (latestIndex < 0) return@withContext
+            val titledHistory = ConversationNameHelper.preserveStoredConversationTitle(latestHistory[latestIndex], loaded)
+            stateHolder._isImageApiCalling.value = false
+            stateHolder.imageApiJob?.cancel()
+            stateHolder.imageApiJob = null
+            stateHolder._currentImageStreamingAiMessageId.value = null
+            Snapshot.withMutableSnapshot {
+                stateHolder.imageGenerationMessages.clear()
+                stateHolder.imageGenerationMessages.addAll(prepared.messages)
+                stateHolder.imageReasoningCompleteMap.clear()
+                stateHolder.imageReasoningCompleteMap.putAll(prepared.reasoningCompleteStates)
+                stateHolder.imageExpandedReasoningStates.clear()
+                stateHolder.imageMessageAnimationStates.clear()
+                stateHolder.imageMessageAnimationStates.putAll(prepared.animationPlayedStates)
+                stateHolder.selectedMediaItems.clear()
             }
-        }
-        
-        // 6. 处理消息并更新状态
-        stateHolder.imageGenerationMessages.clear()
-        
-        // 处理消息：设置 contentStarted 状态（包含图像URL）
-        val processedMessages = ConversationNameHelper
-            .withoutStoredConversationTitle(conversationToLoad)
-            .map { msg ->
-            // 针对图像模式，若AI消息包含图片URL，应视为已产生内容
-            val hasImages = (msg.imageUrls?.isNotEmpty() == true)
-            val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError || hasImages
-        
-            if (msg.sender == com.android.everytalk.data.DataClass.Sender.AI) {
-                if (hasImages && msg.text.isBlank() && msg.parts.isNotEmpty()) {
-                    val rebuiltText = msg.parts.toRecoveredMarkdown()
-                    if (rebuiltText.isNotBlank()) {
-                        android.util.Log.d(TAG, "Rebuilt text for image msg ${msg.id}, images=${msg.imageUrls.size}")
-                        msg.copy(text = rebuiltText, contentStarted = updatedContentStarted)
-                    } else {
-                        msg.copy(contentStarted = updatedContentStarted)
-                    }
-                } else {
-                    msg.copy(contentStarted = updatedContentStarted)
-                }
-            } else {
-                msg.copy(contentStarted = updatedContentStarted)
+            // 替换完成后释放旧图像会话的处理器，沿用现有资源清理入口。
+            stateHolder.getApiHandler().clearImageChatResources(sourceConversationId)
+            stateHolder._imageGenerationHistoricalConversations.value = latestHistory.toMutableList().apply {
+                this[latestIndex] = titledHistory
             }
-        }
-        
-        stateHolder.imageGenerationMessages.addAll(processedMessages)
-        
-        // 设置推理和动画状态
-        processedMessages.forEach { msg ->
-            val hasContentOrError = msg.contentStarted || msg.isError
-            val hasReasoning = !msg.reasoning.isNullOrBlank()
-            
-            if (msg.sender == com.android.everytalk.data.DataClass.Sender.AI && hasReasoning) {
-                stateHolder.imageReasoningCompleteMap[msg.id] = true
+            stateHolder._currentImageGenerationConversationId.value = requestedId
+            stateHolder.applyCurrentImageConversationFunctionToggleState()
+            stateHolder.conversationApiConfigIds.value[requestedId]?.let { configId ->
+                stateHolder._selectedImageGenApiConfig.value = stateHolder._imageGenApiConfigs.value.find { it.id == configId }
             }
-            
-            val animationPlayedCondition = hasContentOrError || (msg.sender == com.android.everytalk.data.DataClass.Sender.AI && hasReasoning)
-            if (animationPlayedCondition) {
-                stateHolder.imageMessageAnimationStates[msg.id] = true
-            }
+            stateHolder._loadedImageGenerationHistoryIndex.value = latestIndex
+            stateHolder._text.value = ""
+            stateHolder.isImageConversationDirty.value = false
         }
-        
-        stateHolder._loadedImageGenerationHistoryIndex.value = index
-        
-        // 7. 重置输入框
-        stateHolder._text.value = ""
-        
-        Log.d(TAG, "Loaded IMAGE history successfully: ${conversationToLoad.size} messages")
     }
-    
+
     /**
      * 清理文本模式API相关状态
      */
