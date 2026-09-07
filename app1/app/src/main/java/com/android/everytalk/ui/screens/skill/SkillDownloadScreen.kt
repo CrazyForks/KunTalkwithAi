@@ -1,6 +1,6 @@
 package com.android.everytalk.ui.screens.skill
 
-import android.widget.Toast
+import com.android.everytalk.util.AppToast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -236,7 +236,7 @@ fun SkillDownloadScreen(navController: NavController) {
                     )
                 }
             }.onSuccess { installedPackage ->
-                Toast.makeText(context, "${item.name} 已安装，共 ${installedPackage.children.size} 个 Skill", Toast.LENGTH_SHORT).show()
+                AppToast.show(context, "${item.name} 已安装，共 ${installedPackage.children.size} 个 Skill")
                 selected = null
             }.onFailure { installError = it.message ?: "Skill 安装失败" }
             installing = false

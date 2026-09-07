@@ -35,6 +35,7 @@ import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationLoadingView
 import org.junit.After
@@ -500,6 +501,34 @@ class ThinkingUiScrollComposeTest {
             .boundsInRoot
             .height
         assertTrue("展开后的执行过程应高于单行标题", rootHeight > 56f * pixelsPerDp)
+    }
+
+    @Test
+    fun `正文后尚无完整工具记录时显示正在编写`() {
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "writing-tool",
+                    displayedReasoningText = "",
+                    activityStatusText = TOOL_CALL_WRITING_STATUS,
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    replyIsStreaming = true,
+                    messageIsError = false,
+                    mainContentHasStarted = true,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+            .assertTextEquals("正在编写")
+        assertTrue(composeRule.onAllNodesWithText("正在编写").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("执行了 1 项服务器操作").fetchSemanticsNodes().isEmpty())
     }
 
     @Test

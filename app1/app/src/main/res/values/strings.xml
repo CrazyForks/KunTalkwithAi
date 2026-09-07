@@ -697,6 +697,9 @@
     <string name="thinking_remote_task_cancelled">Remote task cancelled</string>
     <string name="chat_input_stop">Stop</string>
     <string name="chat_input_pause">Pause</string>
+    <string name="chat_input_pausing_force_stop">Pausing safely. Tap to force stop.</string>
+    <string name="chat_input_stopping">Stopping, please wait</string>
+    <string name="chat_input_preparing">Preparing, please wait</string>
     <string name="chat_input_resume">Resume</string>
     <string name="chat_input_send">Send</string>
     <string name="chat_input_voice">Voice input</string>
@@ -1043,6 +1046,7 @@
     <string name="model_capability_source_user_override">User setting</string>
     <string name="model_capability_source_live_endpoint">Endpoint report</string>
     <string name="model_capability_source_official_catalog">Official catalog</string>
+    <string name="model_capability_source_pi_catalog">pi official catalog</string>
     <string name="model_capability_source_local_cache">Local cache</string>
     <string name="model_capability_source_community_catalog">Community fallback</string>
     <string name="model_capability_source_family_fallback">Family estimate</string>
@@ -1103,6 +1107,7 @@
     <string name="thinking_execution_failed">Execution failed</string>
     <string name="thinking_complete">Complete</string>
     <string name="thinking_processing_duration">Processing · %1$s</string>
+    <string name="thinking_writing">Writing</string>
     <string name="thinking_elapsed_duration">Took %1$s</string>
     <string name="thinking_failed_duration">Execution failed · %1$s</string>
     <string name="thinking_duration_seconds">%1$d sec</string>

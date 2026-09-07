@@ -1,7 +1,7 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.statecontroller.*
 
-import android.widget.Toast
+import com.android.everytalk.util.AppToast
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -275,7 +275,7 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
             )
             if (loaded == null) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, context.getString(R.string.image_save_failed), Toast.LENGTH_SHORT).show()
+                    AppToast.show(context, R.string.image_save_failed)
                 }
                 return@withContext
             }
@@ -287,9 +287,9 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
             )
             withContext(Dispatchers.Main) {
                 if (savedUri != null) {
-                    Toast.makeText(context, context.getString(R.string.image_saved), Toast.LENGTH_SHORT).show()
+                    AppToast.show(context, R.string.image_saved)
                 } else {
-                    Toast.makeText(context, context.getString(R.string.image_save_failed), Toast.LENGTH_SHORT).show()
+                    AppToast.show(context, R.string.image_save_failed)
                 }
             }
         } catch (e: CancellationException) {
@@ -297,7 +297,7 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
         } catch (e: Exception) {
             android.util.Log.e("ImagePreview", "保存图片失败", e)
             withContext(Dispatchers.Main) {
-                Toast.makeText(context, context.getString(R.string.image_save_failed), Toast.LENGTH_SHORT).show()
+                AppToast.show(context, R.string.image_save_failed)
             }
         }
     }

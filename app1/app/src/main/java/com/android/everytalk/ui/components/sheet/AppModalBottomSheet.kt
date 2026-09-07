@@ -1,6 +1,8 @@
 package com.android.everytalk.ui.components.sheet
 
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +40,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -192,6 +196,7 @@ internal fun AppModalBottomSheet(
     } else {
         SheetValue.PartiallyExpanded
     }
+    var gestureFromHandle by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = openExpanded,
         confirmValueChange = { targetValue ->
@@ -200,7 +205,7 @@ internal fun AppModalBottomSheet(
                 targetValue == SheetValue.Expanded -> expansionEnabled
                 targetValue == SheetValue.Hidden ||
                     targetValue == SheetValue.PartiallyExpanded ->
-                    !expansionInProgress && scrollState.value == 0
+                    !expansionInProgress && (gestureFromHandle || scrollState.value == 0)
                 else -> true
             }
         },
@@ -275,16 +280,38 @@ internal fun AppModalBottomSheet(
             shouldDismissOnClickOutside = canDismissSheet,
         ),
         dragHandle = {
-            BottomSheetDefaults.DragHandle(
-                modifier = dragHandleModifier,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            )
+            // 整行留白都是把手区域，而不只是中间细小的灰条。
+            Box(
+                modifier = dragHandleModifier
+                    .fillMaxWidth()
+                    .height(AppModalBottomSheetDragHandleSpace)
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            // 只观察，不消费事件；仍由 Material 处理拖动和关闭动画。
+                            // 松手后的 settle 还会检查关闭权限，因此保留到下一次手势。
+                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            gestureFromHandle = true
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                BottomSheetDefaults.DragHandle(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                )
+            }
         },
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(maximumContentHeight)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        // 正文的下一次手势重新恢复滚动限制，不沿用把手的关闭权限。
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        gestureFromHandle = false
+                    }
+                }
                 .then(sheetContentModifier),
         ) {
             header()

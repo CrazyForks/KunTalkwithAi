@@ -17,6 +17,7 @@ class ModelParametersDialogTest {
         assertEquals(R.string.model_capability_source_user_override, modelCapabilitySourceLabelRes(ModelCapabilitySource.USER_OVERRIDE))
         assertEquals(R.string.model_capability_source_live_endpoint, modelCapabilitySourceLabelRes(ModelCapabilitySource.LIVE_ENDPOINT))
         assertEquals(R.string.model_capability_source_official_catalog, modelCapabilitySourceLabelRes(ModelCapabilitySource.OFFICIAL_CATALOG))
+        assertEquals(R.string.model_capability_source_pi_catalog, modelCapabilitySourceLabelRes(ModelCapabilitySource.PI_CATALOG))
         assertEquals(R.string.model_capability_source_local_cache, modelCapabilitySourceLabelRes(ModelCapabilitySource.LOCAL_CACHE))
         assertEquals(R.string.model_capability_source_community_catalog, modelCapabilitySourceLabelRes(ModelCapabilitySource.COMMUNITY_CATALOG))
         assertEquals(R.string.model_capability_source_family_fallback, modelCapabilitySourceLabelRes(ModelCapabilitySource.FAMILY_FALLBACK))

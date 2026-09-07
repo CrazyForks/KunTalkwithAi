@@ -5,7 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.text.format.Formatter
-import android.widget.Toast
+import com.android.everytalk.util.AppToast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -185,7 +185,7 @@ fun DataManagementScreen(
                                 snapshot = manager.scan()
                                 showResultToast(context, R.string.storage_clear_success, released)
                             }.onFailure {
-                                Toast.makeText(context, R.string.storage_clear_failed, Toast.LENGTH_SHORT).show()
+                                AppToast.show(context, R.string.storage_clear_failed)
                             }
                             isCleaning = false
                         }
@@ -254,7 +254,7 @@ fun DataManagementScreen(
                                 selectedEntryIds = emptySet()
                                 showSelectedResultToast(context, entriesToDelete.size, selectedBytes)
                             }.onFailure {
-                                Toast.makeText(context, R.string.storage_category_clear_failed, Toast.LENGTH_SHORT).show()
+                                AppToast.show(context, R.string.storage_category_clear_failed)
                             }
                             isCleaning = false
                         }
@@ -767,21 +767,19 @@ internal fun formatBytes(bytes: Long): String =
     Formatter.formatShortFileSize(LocalContext.current, bytes.coerceAtLeast(0L))
 
 private fun showResultToast(context: Context, messageRes: Int, bytes: Long) {
-    Toast.makeText(
+    AppToast.show(
         context,
         context.getString(messageRes, Formatter.formatShortFileSize(context, bytes)),
-        Toast.LENGTH_SHORT,
-    ).show()
+    )
 }
 
 private fun showSelectedResultToast(context: Context, count: Int, selectedBytes: Long) {
-    Toast.makeText(
+    AppToast.show(
         context,
         context.getString(
             R.string.storage_selected_delete_success,
             count,
             Formatter.formatShortFileSize(context, selectedBytes),
         ),
-        Toast.LENGTH_SHORT,
-    ).show()
+    )
 }

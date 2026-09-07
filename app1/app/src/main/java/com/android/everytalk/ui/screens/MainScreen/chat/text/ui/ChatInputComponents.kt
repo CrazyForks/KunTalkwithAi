@@ -65,6 +65,8 @@ internal enum class ComposerPrimaryAction {
     SEND,
     PAUSE,
     RESUME,
+    // 外观仍是加载圈，但只在等待安全暂停时允许再次点击强停。
+    FORCE_STOP,
     LOADING,
 }
 
@@ -74,11 +76,15 @@ internal fun resolveComposerPrimaryAction(
     composerMode: ComposerMode,
     hasDraft: Boolean,
     isRemoteCancellationPending: Boolean,
+    isConvertingLongText: Boolean = false,
+    isRunControllable: Boolean = true,
 ): ComposerPrimaryAction = when {
-    isRemoteCancellationPending -> ComposerPrimaryAction.LOADING
+    isRemoteCancellationPending || isConvertingLongText -> ComposerPrimaryAction.LOADING
     composerMode is ComposerMode.EditingPending -> ComposerPrimaryAction.SEND
-    runState == ChatRunState.PauseRequested -> ComposerPrimaryAction.LOADING
     hasDraft -> ComposerPrimaryAction.SEND
+    // Pending 正在派发但 Run 尚未注册时不能显示一个无法执行的暂停按钮。
+    runState != ChatRunState.Idle && !isRunControllable -> ComposerPrimaryAction.LOADING
+    runState == ChatRunState.PauseRequested -> ComposerPrimaryAction.FORCE_STOP
     runState == ChatRunState.Streaming -> ComposerPrimaryAction.PAUSE
     runState == ChatRunState.Paused -> ComposerPrimaryAction.RESUME
     else -> ComposerPrimaryAction.VOICE

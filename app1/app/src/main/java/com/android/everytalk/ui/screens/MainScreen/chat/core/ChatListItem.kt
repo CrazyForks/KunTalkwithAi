@@ -211,6 +211,8 @@ sealed interface ChatListItem {
 }
 
 internal sealed interface OrderedAiOutputSegment {
+    data class UserMessageBoundary(val messageId: String) : OrderedAiOutputSegment
+
     data class Content(
         val text: String,
         val startedAtMillis: Long?,
@@ -258,6 +260,11 @@ internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<Ord
 
     trace.forEach { event ->
         when (event) {
+            is ExecutionTraceEvent.UserMessageBoundary -> {
+                flushContent()
+                flushProcess(event.startedAtMillis)
+                result += OrderedAiOutputSegment.UserMessageBoundary(event.messageId)
+            }
             is ExecutionTraceEvent.Content -> {
                 flushProcess(event.startedAtMillis)
                 if (content.isEmpty()) contentStartedAtMillis = event.startedAtMillis

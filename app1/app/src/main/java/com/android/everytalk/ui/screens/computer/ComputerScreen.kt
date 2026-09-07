@@ -78,6 +78,7 @@ import kotlinx.coroutines.withContext
 fun ComputerScreen(
     viewModel: AppViewModel,
     navController: NavController,
+    onImportExport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -114,22 +115,18 @@ fun ComputerScreen(
     }
 
     /** 返回已有设置页，并把三点菜单选择的目标交给该页面处理。 */
-    fun returnToSettings(tabIndex: Int? = null, openImportExport: Boolean = false) {
-        val existingSettingsEntry = runCatching {
+    fun returnToSettings(tabIndex: Int) {
+        val existingEntry = runCatching {
             navController.getBackStackEntry(Screen.SETTINGS_SCREEN)
         }.getOrNull()
-        val targetEntry = existingSettingsEntry ?: run {
+        val targetEntry = existingEntry ?: run {
             navController.navigate(Screen.SETTINGS_SCREEN) { launchSingleTop = true }
             navController.currentBackStackEntry
         }
-        tabIndex?.let {
-            targetEntry?.savedStateHandle?.set(Screen.SETTINGS_TAB_REQUEST_KEY, it)
-        }
-        if (openImportExport) {
-            targetEntry?.savedStateHandle?.set(Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY, true)
-        }
+        // 从聊天直接进入本页时也要把目标页签交给新建的设置页。
+        targetEntry?.savedStateHandle?.set(Screen.SETTINGS_TAB_REQUEST_KEY, tabIndex)
         showTabMenu = false
-        if (existingSettingsEntry != null) {
+        if (existingEntry != null) {
             navController.popBackStack(Screen.SETTINGS_SCREEN, inclusive = false)
         }
     }
@@ -385,7 +382,7 @@ fun ComputerScreen(
                         tabs = settingsTabs,
                         currentTabIndex = -1,
                         onTabSelected = { index -> returnToSettings(tabIndex = index) },
-                        onImportExport = { returnToSettings(openImportExport = true) },
+                        onImportExport = onImportExport,
                         onOpenComputers = { showTabMenu = false },
                         onOpenSkills = { navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true } },
                         isComputerSelected = true,

@@ -2,7 +2,7 @@ package com.android.everytalk.ui.components.content
 import com.android.everytalk.statecontroller.*
 
 import android.content.ClipData
-import android.widget.Toast
+import com.android.everytalk.util.AppToast
 import com.android.everytalk.R
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.horizontalScroll
@@ -207,7 +207,7 @@ fun CodeBlock(
                     onClick = {
                         scope.launch {
                             clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
-                            Toast.makeText(ctx, codeCopiedText, Toast.LENGTH_SHORT).show()
+                            AppToast.show(ctx, codeCopiedText)
                         }
                     },
                     modifier = Modifier.size(32.dp)

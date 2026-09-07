@@ -92,6 +92,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SkillScreen(
     navController: NavController,
+    onImportExport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -162,16 +163,20 @@ fun SkillScreen(
         }
     }
 
-    fun returnToSettings(tabIndex: Int? = null, openImportExport: Boolean = false) {
-        val settingsEntry = runCatching { navController.getBackStackEntry(Screen.SETTINGS_SCREEN) }.getOrNull()
-        if (settingsEntry != null) {
-            tabIndex?.let { settingsEntry.savedStateHandle[Screen.SETTINGS_TAB_REQUEST_KEY] = it }
-            if (openImportExport) settingsEntry.savedStateHandle[Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY] = true
-            navController.popBackStack(Screen.SETTINGS_SCREEN, inclusive = false)
-        } else {
+    fun returnToSettings(tabIndex: Int) {
+        val existingEntry = runCatching {
+            navController.getBackStackEntry(Screen.SETTINGS_SCREEN)
+        }.getOrNull()
+        val targetEntry = existingEntry ?: run {
             navController.navigate(Screen.SETTINGS_SCREEN) { launchSingleTop = true }
+            navController.currentBackStackEntry
         }
+        // 从聊天直接进入本页时也要把目标页签交给新建的设置页。
+        targetEntry?.savedStateHandle?.set(Screen.SETTINGS_TAB_REQUEST_KEY, tabIndex)
         showTabMenu = false
+        if (existingEntry != null) {
+            navController.popBackStack(Screen.SETTINGS_SCREEN, inclusive = false)
+        }
     }
 
     fun returnToChatHome() {
@@ -287,7 +292,7 @@ fun SkillScreen(
                         tabs = listOf("配置", "联网搜索", "MCP"),
                         currentTabIndex = -1,
                         onTabSelected = { returnToSettings(it) },
-                        onImportExport = { returnToSettings(openImportExport = true) },
+                        onImportExport = onImportExport,
                         onOpenComputers = { navController.navigate(Screen.COMPUTER_SCREEN) },
                         onOpenSkills = { showTabMenu = false },
                         isSkillSelected = true,

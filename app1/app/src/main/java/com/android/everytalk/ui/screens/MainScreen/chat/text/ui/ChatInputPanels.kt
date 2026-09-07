@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
@@ -319,69 +320,68 @@ internal fun ComputerSelectionCard(
                 Text("添加服务器")
             }
         } else {
-            computers.chunked(3).forEach { computerRow ->
-                // 每行最多三个。宽度只设上限，短名称仍按内容收紧，长名称会在胶囊内省略。
-                val maxItemWidth = when (computerRow.size) {
-                    1 -> 184.dp
-                    2 -> 146.dp
-                    else -> 94.dp
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    computerRow.forEach { computer ->
-                        val isReady = computer.status == ComputerStatus.READY
-                        val isSelected = selectedComputerId == computer.id
-                        val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
-                        val shape = RoundedCornerShape(percent = 50)
-                        Box(
-                            modifier = Modifier
-                                .widthIn(min = 72.dp, max = maxItemWidth)
-                                .height(48.dp)
-                                .background(
-                                    color = if (isSelected) {
-                                        accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
-                                    },
-                                    shape = shape,
-                                )
-                                .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
-                                .clip(shape)
-                                .combinedClickable(
-                                    onClick = {
-                                        if (isReady) onSelect(computer) else onUnavailable(computer)
-                                    },
-                                    onLongClick = onAddComputer,
-                                )
-                                .padding(horizontal = 11.dp),
-                            contentAlignment = Alignment.CenterStart,
+            // 始终单行排列，超出弹层时横向滑动；胶囊不再按服务器数量挤压名称。
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                computers.forEach { computer ->
+                    val isReady = computer.status == ComputerStatus.READY
+                    val isSelected = selectedComputerId == computer.id
+                    val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
+                    val shape = RoundedCornerShape(percent = 50)
+                    Box(
+                        modifier = Modifier
+                            .widthIn(min = 72.dp, max = 220.dp)
+                            .height(48.dp)
+                            .background(
+                                color = if (isSelected) {
+                                    accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                                },
+                                shape = shape,
+                            )
+                            .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
+                            .clip(shape)
+                            .combinedClickable(
+                                onClick = {
+                                    if (isReady) onSelect(computer) else onUnavailable(computer)
+                                },
+                                onLongClick = onAddComputer,
+                            )
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_gpt_terminal),
+                                contentDescription = null,
+                                tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = computer.displayName,
+                                // 先给图标和勾选标记留足空间，名称在剩余宽度内按内容收紧。
+                                modifier = Modifier.weight(1f, fill = false),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                            if (isSelected) {
+                                Spacer(Modifier.width(6.dp))
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_gpt_terminal),
-                                    contentDescription = null,
-                                    tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
-                                    modifier = Modifier.size(21.dp),
+                                    painter = painterResource(R.drawable.ic_check),
+                                    contentDescription = stringResource(R.string.state_selected),
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp),
                                 )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = computer.displayName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                )
-                                if (isSelected) {
-                                    Spacer(Modifier.width(7.dp))
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_check),
-                                        contentDescription = stringResource(R.string.state_selected),
-                                        tint = accentColor,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
                             }
                         }
                     }

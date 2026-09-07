@@ -686,7 +686,7 @@ fun ChatMessagesList(
                                 {
                                     viewModel.getMessageById(item.messageId)
                                         ?.executionTrace
-                                        ?.filterNot { it is ExecutionTraceEvent.Content }
+                                        ?.filter { it is ExecutionTraceEvent.Reasoning || it is ExecutionTraceEvent.Tool }
                                         ?: item.events
                                 }
                             }

@@ -131,6 +131,7 @@ class ThinkingExecutionTimelineGroupingTest {
             listOf("正文 1", "process:2", "正文 2", "process:2", "正文 3"),
             segments.map { segment ->
                 when (segment) {
+                    is OrderedAiOutputSegment.UserMessageBoundary -> "user:${segment.messageId}"
                     is OrderedAiOutputSegment.Content -> segment.text
                     is OrderedAiOutputSegment.Process -> "process:${segment.events.size}"
                 }
@@ -156,6 +157,7 @@ class ThinkingExecutionTimelineGroupingTest {
             listOf("上方正文", "process:1", "下方正文"),
             segments.map { segment ->
                 when (segment) {
+                    is OrderedAiOutputSegment.UserMessageBoundary -> "user:${segment.messageId}"
                     is OrderedAiOutputSegment.Content -> segment.text
                     is OrderedAiOutputSegment.Process -> "process:${segment.events.size}"
                 }

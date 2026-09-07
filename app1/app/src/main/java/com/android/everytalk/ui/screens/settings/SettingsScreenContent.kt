@@ -26,8 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.unit.Velocity
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.unit.Dp
 import androidx.compose.material3.*
 import androidx.compose.material3.surfaceColorAtElevation
@@ -54,7 +53,7 @@ import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.statecontroller.controller.config.modelConfigGroupId
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
-import com.android.everytalk.ui.screens.MainScreen.chat.models.centeredModelWindow
+import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -346,19 +345,6 @@ private fun ApiKeyItemGroup(
 ) {
     var showModelPopup by remember { mutableStateOf(false) }
     var showConfirmDeleteGroupDialog by remember { mutableStateOf(false) }
-    // 仅拦截"甩动"(fling)的动量,避免外层跟随;不拦截普通滚动,确保列表可正常滚动
-    val innerListNestedScroll = remember {
-        object : NestedScrollConnection {
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                // 消耗所有可用的 fling 速度,阻止向外层传递
-                return available
-            }
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                // 同样消耗剩余 fling 动量,彻底避免连带外层
-                return available
-            }
-        }
-    }
     val providerName = configsInGroup.firstOrNull()?.provider?.ifBlank { null }
     val providerDisplayName = providerName?.let { localizedProviderLabel(it) }
         ?: stringResource(R.string.settings_integrated_platform)
@@ -691,8 +677,15 @@ private fun ModelListPopup(
     val isDark = isSystemInDarkTheme()
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
-    val visibleConfigs = remember(configs, selectedConfigId) {
-        centeredModelWindow(configs, selectedConfigId)
+    val sortedConfigs = remember(configs) { sortModelConfigs(configs) }
+    val selectedIndex = remember(sortedConfigs, selectedConfigId) {
+        sortedConfigs.indexOfFirst { it.id == selectedConfigId }
+    }
+    // 使用完整列表并让当前模型靠近弹窗中部。LazyColumn 自己处理滚动，不再截断其余模型。
+    val listState = key(sortedConfigs, selectedConfigId) {
+        rememberLazyListState(
+            initialFirstVisibleItemIndex = (selectedIndex - 3).coerceAtLeast(0),
+        )
     }
 
     AppFloatingCardPopup(
@@ -719,12 +712,16 @@ private fun ModelListPopup(
                 )
             }
         } else {
-            Column(
+            LazyColumn(
                 modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp)
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                state = listState,
             ) {
-                visibleConfigs.forEach { config ->
+                items(
+                    items = sortedConfigs,
+                    key = ApiConfig::id,
+                ) { config ->
                     val isSelected = config.id == selectedConfigId
                     Row(
                         modifier = Modifier

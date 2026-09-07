@@ -152,6 +152,7 @@ internal fun modelCapabilitySourceLabelRes(source: ModelCapabilitySource): Int =
     ModelCapabilitySource.USER_OVERRIDE -> R.string.model_capability_source_user_override
     ModelCapabilitySource.LIVE_ENDPOINT -> R.string.model_capability_source_live_endpoint
     ModelCapabilitySource.OFFICIAL_CATALOG -> R.string.model_capability_source_official_catalog
+    ModelCapabilitySource.PI_CATALOG -> R.string.model_capability_source_pi_catalog
     ModelCapabilitySource.LOCAL_CACHE -> R.string.model_capability_source_local_cache
     ModelCapabilitySource.COMMUNITY_CATALOG -> R.string.model_capability_source_community_catalog
     ModelCapabilitySource.FAMILY_FALLBACK -> R.string.model_capability_source_family_fallback

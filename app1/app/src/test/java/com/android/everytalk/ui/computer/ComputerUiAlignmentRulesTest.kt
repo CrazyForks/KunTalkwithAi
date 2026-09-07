@@ -34,11 +34,27 @@ class ComputerUiAlignmentRulesTest {
 
         assertTrue(computerSource.contains("getBackStackEntry(Screen.SETTINGS_SCREEN)"))
         assertTrue(computerSource.contains("Screen.SETTINGS_TAB_REQUEST_KEY"))
-        assertTrue(computerSource.contains("Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY"))
+        val skillSource = sourceFile("ui/screens/skill/SkillScreen.kt").readText(Charsets.UTF_8)
+        listOf(computerSource, skillSource, settingsSource).forEach { source ->
+            assertTrue(source.contains("onImportExport = onImportExport"))
+            assertFalse(source.contains("SETTINGS_IMPORT_EXPORT_REQUEST_KEY"))
+            assertFalse(source.contains("openImportExport = true"))
+        }
+        // 请求键只用于指定目标页签，不能反向写回当前状态覆盖待消费请求。
+        assertFalse(settingsSource.contains("LaunchedEffect(currentTabIndex)"))
+        assertTrue(settingsSource.contains("rememberSaveable { mutableIntStateOf(0) }"))
+        val activitySource = sourceFile("statecontroller/activity/MainActivity.kt").readText(Charsets.UTF_8)
+        assertTrue(activitySource.contains("val openImportExport: () -> Unit = { showImportExportDialog = true }"))
+        assertTrue(Regex("onImportExport = openImportExport").findAll(activitySource).count() == 3)
+        assertTrue(Regex("SettingsImportExportHost\\(").findAll(activitySource).count() == 1)
+        val hostSource = sourceFile("ui/screens/settings/SettingsImportExportHost.kt").readText(Charsets.UTF_8)
+        assertFalse(hostSource.contains("navController"))
+        assertTrue(hostSource.contains("viewModel.settingsExportRequest.collect"))
         assertTrue(computerSource.contains("popBackStack(Screen.SETTINGS_SCREEN, inclusive = false)"))
         assertTrue(settingsSource.contains("getStateFlow(Screen.SETTINGS_TAB_REQUEST_KEY, -1)"))
         assertTrue(settingsSource.contains("currentTabIndex = requestedTabIndex"))
-        assertTrue(settingsSource.contains("showImportExportDialog = true"))
+        // 技能页没有设置页历史记录时，新建页面也必须收到目标页签。
+        assertTrue(skillSource.contains("targetEntry?.savedStateHandle?.set(Screen.SETTINGS_TAB_REQUEST_KEY, tabIndex)"))
     }
 
     @Test
@@ -69,12 +85,12 @@ class ComputerUiAlignmentRulesTest {
 
         assertFalse("选择浮层不应再显示标题", source.contains("agent_server_picker_title"))
         assertFalse("选择浮层不应再显示说明", source.contains("agent_server_picker_description"))
-        assertTrue(source.contains("computers.chunked(3)"))
+        assertFalse(source.contains("computers.chunked(3)"))
+        assertTrue(source.contains(".horizontalScroll(rememberScrollState())"))
         assertTrue(source.contains(".wrapContentWidth()"))
-        assertTrue(source.contains(".widthIn(min = 72.dp, max = maxItemWidth)"))
-        assertTrue(source.contains("1 -> 184.dp"))
-        assertTrue(source.contains("2 -> 146.dp"))
-        assertTrue(source.contains("else -> 94.dp"))
+        assertTrue(source.contains(".widthIn(min = 72.dp, max = 220.dp)"))
+        assertTrue(source.contains("Modifier.weight(1f, fill = false)"))
+        assertTrue(source.contains("softWrap = false"))
         assertTrue(source.contains(".height(48.dp)"))
         assertTrue(source.contains("shape = RoundedCornerShape(percent = 50)"))
         assertTrue(source.contains("computer.displayName"))

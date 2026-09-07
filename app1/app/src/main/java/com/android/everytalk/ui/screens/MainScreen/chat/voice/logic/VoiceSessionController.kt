@@ -10,7 +10,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.VoiceChatSession
 import com.android.everytalk.data.network.RecordingStopReason
 import com.android.everytalk.statecontroller.AppViewModel
-import com.android.everytalk.util.locale.localizeUiMessage
+import com.android.everytalk.util.AppToast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -84,11 +84,7 @@ class VoiceSessionController(
         val errorMsg = configManager.validateConfig(config)
         
         if (errorMsg.isNotEmpty()) {
-            android.widget.Toast.makeText(
-                context,
-                context.localizeUiMessage(errorMsg),
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
+            AppToast.show(context, errorMsg)
             return
         }
         

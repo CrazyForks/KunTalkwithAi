@@ -20,7 +20,7 @@ class PendingMessageInteractionTest {
             resolveComposerPrimaryAction(ChatRunState.Streaming, ComposerMode.Normal, false, false),
         )
         assertEquals(
-            ComposerPrimaryAction.LOADING,
+            ComposerPrimaryAction.FORCE_STOP,
             resolveComposerPrimaryAction(ChatRunState.PauseRequested, ComposerMode.Normal, false, false),
         )
         assertEquals(
@@ -40,6 +40,70 @@ class PendingMessageInteractionTest {
                 false,
             ),
         )
+    }
+
+    @Test
+    fun `转换中停止中和Run注册前不能显示可操作按钮`() {
+        val states = listOf(ChatRunState.Idle, ChatRunState.Streaming, ChatRunState.PauseRequested, ChatRunState.Paused)
+        states.forEach { state ->
+            listOf(false, true).forEach { hasDraft ->
+                assertEquals(ComposerPrimaryAction.LOADING,
+                    resolveComposerPrimaryAction(state, ComposerMode.Normal, hasDraft, true))
+                assertEquals(ComposerPrimaryAction.LOADING,
+                    resolveComposerPrimaryAction(state, ComposerMode.Normal, hasDraft, false, isConvertingLongText = true))
+            }
+        }
+        assertEquals(ComposerPrimaryAction.LOADING,
+            resolveComposerPrimaryAction(ChatRunState.Streaming, ComposerMode.Normal, false, false, isRunControllable = false))
+        assertEquals(ComposerPrimaryAction.LOADING,
+            resolveComposerPrimaryAction(ChatRunState.Paused, ComposerMode.Normal, false, false, isRunControllable = false))
+    }
+
+    @Test
+    fun `暂停请求和已暂停仍允许提交草稿但无草稿只在安全暂停后显示三角形`() {
+        listOf(ChatRunState.PauseRequested, ChatRunState.Paused).forEach { state ->
+            assertEquals(ComposerPrimaryAction.SEND,
+                resolveComposerPrimaryAction(state, ComposerMode.Normal, true, false))
+            assertEquals(ComposerPrimaryAction.SEND,
+                resolveComposerPrimaryAction(state,
+                    ComposerMode.EditingPending("id", "conversation", 1, "old", "old", emptyList(), emptyList()), false, false))
+        }
+        assertEquals(ComposerPrimaryAction.VOICE,
+            resolveComposerPrimaryAction(ChatRunState.Idle, ComposerMode.Normal, false, false))
+    }
+
+    @Test
+    fun `按钮图标和点击共用状态且暂停继续与强停分离`() {
+        val root = generateSequence(File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
+            .first { File(it, "app/src/main/java").isDirectory }
+        val input = File(root, "app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatInputArea.kt").readText()
+        val click = input.substringAfter("val onSendClick: () -> Unit").substringBefore("val inputBackgroundColor")
+        assertTrue(input.contains("val hasContent = localText.isNotBlank()"))
+        assertTrue(input.contains("val buttonState = primaryAction"))
+        assertTrue(click.contains("onPauseStreaming()"))
+        assertTrue(click.contains("onResumeStreaming()"))
+        assertTrue(click.contains("viewModel.forceStopPendingPause(controlledMessageId)"))
+        assertTrue(!input.contains("IconButton(onClick = viewModel::onCancelAPICall)"))
+        assertTrue(input.contains("state == ComposerPrimaryAction.LOADING || state == ComposerPrimaryAction.FORCE_STOP"))
+        assertTrue(input.contains("enabled = state == primaryAction && state != ComposerPrimaryAction.LOADING"))
+    }
+
+    @Test
+    fun `单按钮从安全暂停等待到强停处理中不再接受第三次点击`() {
+        assertEquals(ComposerPrimaryAction.PAUSE,
+            resolveComposerPrimaryAction(ChatRunState.Streaming, ComposerMode.Normal, false, false))
+        assertEquals(ComposerPrimaryAction.FORCE_STOP,
+            resolveComposerPrimaryAction(ChatRunState.PauseRequested, ComposerMode.Normal, false, false))
+        assertEquals(ComposerPrimaryAction.LOADING,
+            resolveComposerPrimaryAction(ChatRunState.PauseRequested, ComposerMode.Normal, false, true))
+        assertEquals(ComposerPrimaryAction.LOADING,
+            resolveComposerPrimaryAction(ChatRunState.Idle, ComposerMode.Normal, false, true))
+        assertEquals(ComposerPrimaryAction.VOICE,
+            resolveComposerPrimaryAction(ChatRunState.Idle, ComposerMode.Normal, false, false))
+        assertEquals(ComposerPrimaryAction.RESUME,
+            resolveComposerPrimaryAction(ChatRunState.Paused, ComposerMode.Normal, false, false))
+        assertEquals(ComposerPrimaryAction.LOADING,
+            resolveComposerPrimaryAction(ChatRunState.PauseRequested, ComposerMode.Normal, false, false, isRunControllable = false))
     }
 
     @Test

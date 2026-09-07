@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.android.everytalk.R
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
@@ -82,6 +83,7 @@ internal fun localizedExecutionStatusText(status: String?): String? {
     val context = LocalContext.current
     return when {
         text == "等待首个响应" -> stringResource(R.string.thinking_waiting_first_response)
+        text == TOOL_CALL_WRITING_STATUS -> stringResource(R.string.thinking_writing)
         text == "正在接收思考" -> stringResource(R.string.thinking_receiving)
         text == "已收到思考，等待正文" -> stringResource(R.string.thinking_received_waiting_content)
         text == "正在准备服务器" -> stringResource(R.string.thinking_preparing_server)
@@ -268,7 +270,8 @@ internal fun orderedExecutionItems(
     if (executionTrace.isNotEmpty()) {
         executionTrace.forEach { event ->
             when (event) {
-                is ExecutionTraceEvent.Content -> Unit
+                is ExecutionTraceEvent.Content,
+                is ExecutionTraceEvent.UserMessageBoundary -> Unit
                 is ExecutionTraceEvent.Reasoning -> event.text
                     .takeIf(String::isNotBlank)
                     ?.let { add(OrderedExecutionItem.Reasoning(it)) }

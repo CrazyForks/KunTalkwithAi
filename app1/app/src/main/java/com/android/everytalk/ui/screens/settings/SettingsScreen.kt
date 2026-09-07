@@ -2,20 +2,15 @@ package com.android.everytalk.ui.screens.settings
 import com.android.everytalk.statecontroller.*
 
 import android.util.Log
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.text.font.FontWeight
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -29,11 +24,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.draw.clip
@@ -51,24 +41,10 @@ import com.android.everytalk.ui.screens.settings.EditExternalWebSearchProviderDi
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
-import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import com.android.everytalk.navigation.Screen
 import java.util.UUID
-
-private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
-
-private fun readSettingsImportText(
-    inputStream: java.io.InputStream,
-    tooLargeMessage: String,
-): String {
-    return try {
-        readAtMost(inputStream, MAX_SETTINGS_IMPORT_BYTES).toString(Charsets.UTF_8)
-    } catch (e: IllegalArgumentException) {
-        throw IllegalStateException(tooLargeMessage, e)
-    }
-}
 
 // 平台默认地址映射
 object SettingsDefaults {
@@ -106,6 +82,7 @@ object SettingsDefaults {
 fun SettingsScreen(
     viewModel: AppViewModel,
     navController: NavController,
+    onImportExport: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Log.i("ScreenComposition", "SettingsScreen Composing/Recomposing.")
@@ -132,7 +109,6 @@ fun SettingsScreen(
     val externalWebSearchConfigs by viewModel.externalWebSearchConfigs.collectAsState()
     val selectedExternalWebSearchProviderId by viewModel.selectedExternalWebSearchProviderId.collectAsState()
     var editingExternalProvider by remember { mutableStateOf<ExternalWebSearchProvider?>(null) }
-    val scope = rememberCoroutineScope()
 
     val apiConfigsByApiKeyAndModality = remember(textConfigs, imageConfigs, isInImageMode) {
         val configsToShow = if (isInImageMode) {
@@ -173,97 +149,6 @@ fun SettingsScreen(
     var modelParametersTarget by remember { mutableStateOf<ApiConfig?>(null) }
     var showConfirmDeleteProviderDialog by remember { mutableStateOf(false) }
     var providerToDelete by remember { mutableStateOf<String?>(null) }
-    var showImportExportDialog by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val importTooLargeMessage = stringResource(R.string.settings_import_too_large)
-    val exportContentExpiredMessage = stringResource(R.string.settings_export_content_expired)
-    val exportSuccessMessage = stringResource(R.string.settings_export_success)
-    val importUnreadableMessage = stringResource(R.string.settings_import_unreadable)
-
-    val exportSettingsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json"),
-        onResult = { uri ->
-            val exportData = viewModel.consumeSettingsExport()
-            if (uri == null) {
-                exportData?.file?.delete()
-                return@rememberLauncherForActivityResult
-            } else {
-                val sourceFile = exportData?.file?.takeIf { it.isFile }
-                if (sourceFile == null) {
-                    viewModel.showToast(exportContentExpiredMessage)
-                } else {
-                    scope.launch {
-                    try {
-                        withContext(Dispatchers.IO) {
-                            context.contentResolver.openFileDescriptor(uri, "w")?.use { pfd ->
-                                java.io.FileOutputStream(pfd.fileDescriptor).use { outputStream ->
-                                    outputStream.channel.truncate(0)
-                                    sourceFile.inputStream().buffered().use { input ->
-                                        input.copyTo(outputStream)
-                                    }
-                                }
-                            }
-                        }
-                        viewModel.showToast(exportSuccessMessage)
-                    } catch (e: Exception) {
-                        Log.e("SettingsScreen", "导出失败", e)
-                        viewModel.showToast(
-                            context.getString(
-                                R.string.settings_export_failed_detail,
-                                e.message ?: context.getString(R.string.unknown_error),
-                            )
-                        )
-                    } finally {
-                        sourceFile.delete()
-                    }
-                }
-            }
-            }
-        }
-    )
-
-    val importSettingsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-        onResult = { uri ->
-            uri?.let {
-                scope.launch {
-                try {
-                    val jsonContent = withContext(Dispatchers.IO) {
-                        context.contentResolver.openAssetFileDescriptor(it, "r")?.use { descriptor ->
-                            val declaredLength = descriptor.length
-                            if (declaredLength > MAX_SETTINGS_IMPORT_BYTES) {
-                                throw IllegalStateException(importTooLargeMessage)
-                            }
-                        }
-                        context.contentResolver.openInputStream(it)?.use { inputStream ->
-                            readSettingsImportText(inputStream, importTooLargeMessage)
-                        }
-                    }
-                    if (jsonContent == null) {
-                        viewModel.showToast(importUnreadableMessage)
-                    } else {
-                        viewModel.importSettings(jsonContent)
-                    }
-                } catch (e: Exception) {
-                    viewModel.showToast(
-                        context.getString(
-                            R.string.settings_import_failed_detail,
-                            e.message ?: context.getString(R.string.unknown_error),
-                        )
-                    )
-                }
-                }
-            }
-        }
-    )
-
-    LaunchedEffect(Unit) {
-        viewModel.settingsExportRequest.collect { data ->
-            viewModel.stageSettingsExport(data)
-            exportSettingsLauncher.launch(data.fileName)
-        }
-    }
-    
     LaunchedEffect(isInImageMode) {
         viewModel.showManualModelInputRequest.collect { request ->
             if (request.isImageGen == isInImageMode) showManualModelInputDialog = true
@@ -300,7 +185,8 @@ fun SettingsScreen(
         stringResource(R.string.settings_tab_web_search),
         stringResource(R.string.settings_tab_mcp),
     )
-    var currentTabIndex by remember { mutableIntStateOf(0) }
+    // 保存设置页当前页签，避免从其他设置入口返回时默认跳回配置页。
+    var currentTabIndex by rememberSaveable { mutableIntStateOf(0) }
     var showTabMenu by remember { mutableStateOf(false) }
     var showMcpAddDialog by remember { mutableStateOf(false) }
     val settingsBackStackEntry = remember(navController) {
@@ -315,23 +201,12 @@ fun SettingsScreen(
     val requestedTabIndex by settingsBackStackEntry.savedStateHandle
         .getStateFlow(Screen.SETTINGS_TAB_REQUEST_KEY, -1)
         .collectAsState()
-    val importExportRequested by settingsBackStackEntry.savedStateHandle
-        .getStateFlow(Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY, false)
-        .collectAsState()
-
     LaunchedEffect(requestedTabIndex) {
         if (requestedTabIndex in tabs.indices) {
             currentTabIndex = requestedTabIndex
             settingsBackStackEntry.savedStateHandle[Screen.SETTINGS_TAB_REQUEST_KEY] = -1
         }
     }
-    LaunchedEffect(importExportRequested) {
-        if (importExportRequested) {
-            showImportExportDialog = true
-            settingsBackStackEntry.savedStateHandle[Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY] = false
-        }
-    }
-
     val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
     val bottomContentPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 48.dp
 
@@ -387,23 +262,11 @@ fun SettingsScreen(
                 } else {
                     AnimatedContent(
                         targetState = currentTabIndex,
+                        modifier = Modifier.fillMaxSize(),
                         transitionSpec = {
-                            val direction = if (targetState > initialState) {
-                                slideInHorizontally { it / 3 } + fadeIn(
-                                    animationSpec = tween(200)
-                                ) togetherWith
-                                slideOutHorizontally { -it / 3 } + fadeOut(
-                                    animationSpec = tween(200)
-                                )
-                            } else {
-                                slideInHorizontally { -it / 3 } + fadeIn(
-                                    animationSpec = tween(200)
-                                ) togetherWith
-                                slideOutHorizontally { it / 3 } + fadeOut(
-                                    animationSpec = tween(200)
-                                )
-                            }
-                            direction.using(SizeTransform(clip = false))
+                            // 页签和独立设置路由共用动画；固定容器尺寸，避免内容高度参与过渡。
+                            (settingsMenuEnterTransition() togetherWith settingsMenuExitTransition())
+                                .using(null)
                         },
                         label = "settings_tab_transition"
                     ) { tabIndex ->
@@ -604,7 +467,7 @@ fun SettingsScreen(
                                     currentTabIndex = index
                                     showTabMenu = false
                                 },
-                                onImportExport = { showImportExportDialog = true },
+                                onImportExport = onImportExport,
                                 onOpenComputers = {
                                     showTabMenu = false
                                     navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
@@ -668,7 +531,7 @@ fun SettingsScreen(
                                 tabs = emptyList(),
                                 currentTabIndex = -1,
                                 onTabSelected = { showTabMenu = false },
-                                onImportExport = { showImportExportDialog = true },
+                                onImportExport = onImportExport,
                                 onOpenComputers = {
                                     showTabMenu = false
                                     navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
@@ -908,27 +771,6 @@ fun SettingsScreen(
             ),
         )
     }
-    if (showImportExportDialog) {
-        // 获取聊天历史数量
-        val chatHistory by viewModel.historicalConversations.collectAsState()
-        val imageHistory by viewModel.imageGenerationHistoricalConversations.collectAsState()
-        
-        ImportExportDialog(
-            onDismissRequest = { showImportExportDialog = false },
-            onExport = { includeHistory ->
-                viewModel.exportSettings(includeHistory)
-                showImportExportDialog = false
-            },
-            onImport = {
-                importSettingsLauncher.launch("application/json")
-                showImportExportDialog = false
-            },
-            isExportEnabled = (textConfigs + imageConfigs).isNotEmpty() || chatHistory.isNotEmpty() || imageHistory.isNotEmpty(),
-            chatHistoryCount = chatHistory.size,
-            imageHistoryCount = imageHistory.size
-        )
-    }
-
     if (showMcpAddDialog) {
         com.android.everytalk.ui.screens.mcp.AddMcpServerDialog(
             onConfirm = { config ->

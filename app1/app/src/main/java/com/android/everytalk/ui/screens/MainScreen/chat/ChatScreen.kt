@@ -683,7 +683,8 @@ fun ChatScreen(
                 onToggleCodeExecution = {
                     viewModel.toggleCodeExecutionEnabled()
                 },
-                onToggleStreamingPause = viewModel::toggleStreamingPause,
+                onPauseStreaming = viewModel::pauseStreaming,
+                onResumeStreaming = viewModel::resumeStreaming,
                 focusRequester = focusRequester,
                 selectedApiConfig = selectedApiConfig,
                 onShowSnackbar = { viewModel.showSnackbar(it) },

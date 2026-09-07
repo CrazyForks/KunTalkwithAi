@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -355,6 +357,8 @@ internal fun ReasoningToggleAndContent(
     }
     val elapsedText = elapsedMillis?.let { localizedExecutionDuration(it) }
     val executionChainTitle = when {
+        processIsActive && activityStatusText == TOOL_CALL_WRITING_STATUS ->
+            stringResource(R.string.thinking_writing)
         processIsActive && elapsedText != null ->
             stringResource(R.string.thinking_processing_duration, elapsedText)
         processIsActive -> stringResource(R.string.computer_action_working).trimEnd('…')

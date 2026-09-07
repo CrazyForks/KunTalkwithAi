@@ -59,6 +59,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -158,7 +160,8 @@ fun ChatInputArea(
     onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean = false,
     onToggleCodeExecution: () -> Unit = {},
-    onToggleStreamingPause: () -> Unit,
+    onPauseStreaming: () -> Unit,
+    onResumeStreaming: () -> Unit,
     focusRequester: FocusRequester,
     selectedApiConfig: ApiConfig? = null,
     onShowSnackbar: (String) -> Unit,
@@ -202,9 +205,13 @@ fun ChatInputArea(
     val computers by viewModel.computers.collectAsState()
     val computerSelections by viewModel.computerSelections.collectAsState()
     val currentConversationId by viewModel.currentConversationId.collectAsState()
+    val pendingInterventions by viewModel.pendingInterventions.collectAsState()
+    val currentIntervention = pendingInterventions.firstOrNull { it.sessionId == currentConversationId }
     val pendingMessages by viewModel.pendingMessages.collectAsState()
     val composerMode by viewModel.composerMode.collectAsState()
     val chatRunState by viewModel.chatRunState.collectAsState()
+    val runControlState by viewModel.currentAgentRunControlState.collectAsState()
+    val controlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsState()
     val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
     val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
     val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
@@ -623,70 +630,78 @@ fun ChatInputArea(
         if (imeInsets.getBottom(density) > 0) keyboardController?.hide()
     }
 
-    // 🎯 性能优化：发送时使用本地文本，确保发送最新内容
-    val onSendClick =
-        remember(chatRunState, composerMode, isRemoteCancellationPending, isConvertingLongText, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
-            {
-                try {
-                    val hasDraft = localText.isNotBlank() || selectedMediaItems.isNotEmpty()
-                    val contentParts = buildSkillContentParts(localText, skillReferences)
-                    val displayText = displaySkillEditorText(localText, skillReferences)
-                    if (isRemoteCancellationPending) {
-                        // 远端取消尚未确认，固定按钮只展示加载，不重复发起取消或新消息。
-                    } else if (isConvertingLongText) {
-                        onShowSnackbar(context.getString(R.string.chat_input_long_text_converting))
-                    } else if (composerMode is ComposerMode.EditingPending) {
-                        if (!hasDraft) {
-                            onShowSnackbar(context.getString(R.string.pending_message_empty))
-                        } else {
-                            viewModel.commitPendingMessageEdit(
-                                content = displayText,
-                                composerText = localText,
-                                contentParts = contentParts,
-                                attachments = selectedMediaItems.toList(),
-                                onStored = ::clearSubmittedComposer,
-                            )
-                        }
-                    } else if (chatRunState != ChatRunState.Idle && !hasDraft) {
-                        onToggleStreamingPause()
-                    } else if (chatRunState != ChatRunState.Idle) {
-                        if (selectedApiConfig == null) {
-                            onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
-                        } else {
-                            viewModel.enqueuePendingMessage(
-                                content = displayText,
-                                composerText = localText,
-                                contentParts = contentParts,
-                                attachments = selectedMediaItems.toList(),
-                                onStored = {
-                                    clearSubmittedComposer()
-                                },
-                            )
-                        }
-                    } else if (!hasDraft) {
-                        onShowVoiceInput()
-                    } else if (selectedApiConfig != null) {
-                        val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
-                        val mimeType = audioItem?.mimeType
-                        onSendMessageRequest(
-                            displayText,
-                            false,
-                            selectedMediaItems.toList(),
-                            mimeType,
-                            contentParts,
-                        )
-                        clearSubmittedComposer()
-                    } else {
-                        Log.w("SendMessage", "请先选择 API 配置")
-                        onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
-                    }
-                } catch (e: Exception) {
-                    Log.e("SendMessage", "发送消息时发生错误", e)
-                    onShowSnackbar(context.getString(R.string.chat_input_send_failed))
+    // 图标和点击共用同一事实；空白不是草稿，不能显示发送却执行暂停或打开语音。
+    val hasContent = localText.isNotBlank() || selectedMediaItems.isNotEmpty()
+    val primaryAction = resolveComposerPrimaryAction(
+        runState = chatRunState,
+        composerMode = composerMode,
+        hasDraft = hasContent,
+        isRemoteCancellationPending = isRemoteCancellationPending,
+        isConvertingLongText = isConvertingLongText,
+        isRunControllable = runControlState != null,
+    )
+    // 不缓存捕获 Skill 引用和回调的闭包，使用本次重组的最新草稿。
+    val onSendClick: () -> Unit = {
+        try {
+            val hasDraft = hasContent
+            val contentParts = buildSkillContentParts(localText, skillReferences)
+            val displayText = displaySkillEditorText(localText, skillReferences)
+            if (primaryAction == ComposerPrimaryAction.LOADING) {
+                // 转换、Run 注册或强停处理中不可重复操作。
+            } else if (primaryAction == ComposerPrimaryAction.FORCE_STOP) {
+                viewModel.forceStopPendingPause(controlledMessageId)
+            } else if (primaryAction == ComposerPrimaryAction.PAUSE) {
+                onPauseStreaming()
+            } else if (primaryAction == ComposerPrimaryAction.RESUME) {
+                onResumeStreaming()
+            } else if (composerMode is ComposerMode.EditingPending) {
+                if (!hasDraft) {
+                    onShowSnackbar(context.getString(R.string.pending_message_empty))
+                } else {
+                    viewModel.commitPendingMessageEdit(
+                        content = displayText,
+                        composerText = localText,
+                        contentParts = contentParts,
+                        attachments = selectedMediaItems.toList(),
+                        onStored = ::clearSubmittedComposer,
+                    )
                 }
-                Unit
+            } else if (chatRunState != ChatRunState.Idle) {
+                if (selectedApiConfig == null) {
+                    onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
+                } else {
+                    viewModel.enqueuePendingMessage(
+                        content = displayText,
+                        composerText = localText,
+                        contentParts = contentParts,
+                        attachments = selectedMediaItems.toList(),
+                        onStored = {
+                            clearSubmittedComposer()
+                        },
+                    )
+                }
+            } else if (!hasDraft) {
+                onShowVoiceInput()
+            } else if (selectedApiConfig != null) {
+                val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
+                val mimeType = audioItem?.mimeType
+                onSendMessageRequest(
+                    displayText,
+                    false,
+                    selectedMediaItems.toList(),
+                    mimeType,
+                    contentParts,
+                )
+                clearSubmittedComposer()
+            } else {
+                Log.w("SendMessage", "请先选择 API 配置")
+                onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
             }
+        } catch (e: Exception) {
+            Log.e("SendMessage", "发送消息时发生错误", e)
+            onShowSnackbar(context.getString(R.string.chat_input_send_failed))
         }
+    }
 
     val inputBackgroundColor = MaterialTheme.colorScheme.background
 
@@ -758,7 +773,6 @@ fun ChatInputArea(
                     modifier = Modifier.padding(horizontal = 10.dp),
                 )
 
-                val hasContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty()
                 val isDarkTheme = isSystemInDarkTheme()
                 var isFocused by remember { mutableStateOf(false) }
                 var showFunctionPanel by remember { mutableStateOf(false) }
@@ -1380,12 +1394,7 @@ fun ChatInputArea(
                                         innerTextField()
                                     }
                                     Spacer(Modifier.width(8.dp))
-                                    val buttonState = resolveComposerPrimaryAction(
-                                        runState = chatRunState,
-                                        composerMode = composerMode,
-                                        hasDraft = hasContent,
-                                        isRemoteCancellationPending = isRemoteCancellationPending,
-                                    )
+                                    val buttonState = primaryAction
                                     AnimatedContent(
                                         targetState = buttonState,
                                         transitionSpec = {
@@ -1401,8 +1410,16 @@ fun ChatInputArea(
                                         },
                                         label = "InputSendButton"
                                     ) { state ->
+                                        val loadingDescription = when {
+                                            state == ComposerPrimaryAction.FORCE_STOP -> stringResource(R.string.chat_input_pausing_force_stop)
+                                            isRemoteCancellationPending -> stringResource(R.string.chat_input_stopping)
+                                            isConvertingLongText -> stringResource(R.string.chat_input_long_text_converting)
+                                            else -> stringResource(R.string.chat_input_preparing)
+                                        }
                                         FilledIconButton(
                                             onClick = onSendClick,
+                                            // 动画退出中的旧图标不可点击，以免旧图标执行新状态动作。
+                                            enabled = state == primaryAction && state != ComposerPrimaryAction.LOADING,
                                             shape = CircleShape,
                                             colors = IconButtonDefaults.filledIconButtonColors(
                                                 containerColor = buttonBackgroundColor,
@@ -1410,16 +1427,18 @@ fun ChatInputArea(
                                             ),
                                             modifier = Modifier.size(36.dp)
                                         ) {
-                                            if (state == ComposerPrimaryAction.LOADING) {
+                                            if (state == ComposerPrimaryAction.LOADING || state == ComposerPrimaryAction.FORCE_STOP) {
                                                 CircularProgressIndicator(
-                                                    modifier = Modifier.size(18.dp),
+                                                    modifier = Modifier.size(18.dp).semantics {
+                                                        contentDescription = loadingDescription
+                                                    },
                                                     color = iconColor,
                                                     strokeWidth = 2.dp,
                                                 )
                                             } else {
                                                 Icon(
                                                     painter = when (state) {
-                                                        ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_stop)
+                                                        ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_pause)
                                                         ComposerPrimaryAction.RESUME -> painterResource(R.drawable.ic_gpt_play)
                                                         ComposerPrimaryAction.SEND -> painterResource(R.drawable.ic_arrow_up)
                                                         else -> painterResource(R.drawable.ic_voice_bold)
@@ -1506,8 +1525,55 @@ fun ChatInputArea(
         )
     }
 
+    currentIntervention?.let { intervention ->
+        AgentInterventionDialog(
+            intervention = intervention,
+            onResolveNone = { pending ->
+                pending.resolutionNonce?.let { nonce ->
+                    viewModel.resolveIntervention(pending.suspensionId, pending.rowVersion, nonce)
+                }
+            },
+            onResolveEphemeral = { pending, secret ->
+                val nonce = pending.resolutionNonce
+                if (nonce == null) {
+                    secret.fill('\u0000')
+                } else {
+                    viewModel.resolveEphemeralIntervention(
+                        pending.suspensionId,
+                        pending.rowVersion,
+                        nonce,
+                        secret,
+                    )
+                }
+            },
+            onCreateAuthorization = { pending, secret ->
+                val nonce = pending.resolutionNonce
+                if (nonce == null) {
+                    secret.fill('\u0000')
+                } else {
+                    viewModel.createAndResolveAuthorizationIntervention(
+                        pending.suspensionId,
+                        pending.rowVersion,
+                        nonce,
+                        secret,
+                    )
+                }
+            },
+            onReject = { pending ->
+                viewModel.rejectIntervention(pending.suspensionId, pending.rowVersion)
+            },
+            onConfirmUnknownDelivered = { pending ->
+                viewModel.confirmUnknownInterventionDelivered(pending.suspensionId, pending.rowVersion)
+            },
+            onContinueUnknown = { pending ->
+                viewModel.continueAfterUnknownIntervention(pending.suspensionId, pending.rowVersion)
+            },
+        )
+    }
+
     agentEnableApprovalRequest?.takeIf {
-        pendingApprovalForComputerSelection == null &&
+        currentIntervention == null &&
+            pendingApprovalForComputerSelection == null &&
             pendingWorkspaceRecreationAction == null &&
             pendingAgentAction == null &&
             pendingNotificationPermissionAction == null
@@ -1583,7 +1649,7 @@ fun ChatInputArea(
         )
     }
 
-    skillSecretApprovalRequest?.let { request ->
+    skillSecretApprovalRequest?.takeIf { currentIntervention == null }?.let { request ->
         val dialogBg = appDialogContainerColor()
         val dialogContent = appDialogContentColor()
         val dialogBorder = appDialogBorderColor()
