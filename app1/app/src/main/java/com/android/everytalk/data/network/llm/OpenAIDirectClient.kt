@@ -22,6 +22,7 @@ import io.ktor.http.content.*
 import android.util.Base64
 import kotlinx.coroutines.CancellationException
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 object OpenAIDirectClient {
     private const val TAG = "OpenAIDirectClient"
@@ -34,6 +35,10 @@ object OpenAIDirectClient {
         "thoughts",
     )
     private const val MAX_QWEN_UPLOAD_FILE_BYTES = 10L * 1024L * 1024L
+    private val unsupportedStreamUsage = ConcurrentHashMap.newKeySet<String>()
+
+    private fun streamUsageCapabilityKey(request: ChatRequest): String =
+        "${resolvedOpenAIApiAddress(request).trimEnd('/')}|${request.model}"
 
     @OptIn(ExperimentalCoroutinesApi::class)
     internal fun streamSingleTurn(
@@ -62,9 +67,26 @@ object OpenAIDirectClient {
                 configureSSERequest()
             }.execute { response ->
                 if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost()
+                    val automaticUsage = !effectiveRequest.customModelParameters.orEmpty().containsKey("stream_options")
+                    val rejectedUsage = response.status.value in setOf(400, 422) &&
+                        errorBody?.contains("stream_options", ignoreCase = true) == true &&
+                        listOf("unsupported", "not supported", "unknown", "unrecognized", "not permitted", "not allowed", "extra inputs")
+                            .any { errorBody.contains(it, ignoreCase = true) }
+                    if (automaticUsage && rejectedUsage && unsupportedStreamUsage.add(streamUsageCapabilityKey(effectiveRequest))) {
+                        // 请求尚未开始生成时才降级。交给 Agent 的独立请求恢复，保留一次请求一条账目的约束。
+                        terminalSent = true
+                        send(AppStreamEvent.Error(
+                            message = "服务端不支持流式用量参数，正在关闭该参数后重试",
+                            code = "stream_usage_unsupported",
+                            type = "retryable_network",
+                        ))
+                        send(AppStreamEvent.Finish("connection_failed"))
+                        return@execute
+                    }
                     val result = NetworkUtils.handleApiError(
                         response.status,
-                        response.readErrorTextAtMost(),
+                        errorBody,
                         "OpenAI",
                     )
                     terminalSent = true
@@ -152,8 +174,11 @@ object OpenAIDirectClient {
             put("model", request.model)
             put("stream", true)
             if (officialOpenAIEndpoint) {
-                // Pi 的官方 OpenAI 适配器明确关闭服务端存储，并始终请求最终 usage。
+                // 官方 OpenAI 明确关闭服务端响应存储；这不影响提示词缓存。
                 put("store", false)
+            }
+            // 兼容接口也需要显式索取最终用量，否则可能命中缓存却始终没有统计。
+            if (streamUsageCapabilityKey(request) !in unsupportedStreamUsage) {
                 putJsonObject("stream_options") { put("include_usage", true) }
             }
             promptCacheKey?.let { cacheKey ->
@@ -575,6 +600,10 @@ object OpenAIDirectClient {
                                             val name = function?.get("name")?.jsonPrimitive?.contentOrNull
                                             val argumentsDelta = function?.get("arguments")?.jsonPrimitive?.contentOrNull ?: ""
 
+                                            // 首个参数片段就反馈生成状态，不能等 JSON 拼完才让界面显示进度。
+                                            if (!hasToolCalls) {
+                                                emitEvent(AppStreamEvent.ExecutionStatusUpdate(TOOL_CALL_WRITING_STATUS))
+                                            }
                                             val state = toolCallsMap.getOrPut(index) { OpenAIStreamingToolCall() }
                                             id?.takeIf(String::isNotBlank)?.let { state.id = it }
                                             name?.takeIf(String::isNotBlank)?.let { state.name = it }
@@ -735,8 +764,12 @@ object OpenAIDirectClient {
             inputTokens = (usage["prompt_tokens"] as? JsonPrimitive)?.longOrNull,
             outputTokens = (usage["completion_tokens"] as? JsonPrimitive)?.longOrNull,
             reasoningTokens = (completionDetails?.get("reasoning_tokens") as? JsonPrimitive)?.longOrNull,
-            cachedInputTokens = (promptDetails?.get("cached_tokens") as? JsonPrimitive)?.longOrNull,
-            cacheWriteTokens = (promptDetails?.get("cache_write_tokens") as? JsonPrimitive)?.longOrNull,
+            // 标准字段优先；DeepSeek 和部分 Claude 转接服务使用顶层缓存字段。
+            cachedInputTokens = (promptDetails?.get("cached_tokens") as? JsonPrimitive)?.longOrNull
+                ?: (usage["prompt_cache_hit_tokens"] as? JsonPrimitive)?.longOrNull
+                ?: (usage["cache_read_input_tokens"] as? JsonPrimitive)?.longOrNull,
+            cacheWriteTokens = (promptDetails?.get("cache_write_tokens") as? JsonPrimitive)?.longOrNull
+                ?: (usage["cache_creation_input_tokens"] as? JsonPrimitive)?.longOrNull,
             totalTokens = (usage["total_tokens"] as? JsonPrimitive)?.longOrNull,
             isFinal = true,
             source = TokenUsageSource.OPENAI_CHAT,

@@ -9,15 +9,69 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val MAX_MODEL_PAGE_RESPONSE_BYTES = 4L * 1024L * 1024L
+private const val MODEL_DETAIL_CONCURRENCY = 6
+private const val MODEL_DETAIL_BATCH_TIMEOUT_MS = 20_000L
+private const val COMMUNITY_CATALOG_TIMEOUT_MS = 10_000L
 
 internal class ModelCatalogService(
     private val client: HttpClient,
     private val endpointCache: ModelCapabilityCache,
     private val modelsDevCatalog: ModelsDevCatalog,
+    private val piModelCatalog: PiModelCatalog,
 ) {
+    /**
+     * 获取列表时同步补齐参数，返回各来源候选而不是混成一个来源。
+     * 列表只下载一次；详情最多并发六个，超时保留已完成结果，避免大目录长时间阻塞界面。
+     * 未提供的字段继续由 pi、社区目录以及配置层的家族和默认值补齐。
+     */
+    suspend fun getCatalogWithCapabilities(
+        apiUrl: String,
+        apiKey: String,
+        channel: String?,
+    ): List<ModelCapabilityCandidate> {
+        val catalog = getCatalog(apiUrl, apiKey, channel)
+        val endpoint = resolveModelCatalogEndpoint(apiUrl, channel)
+        val cleanedApiKey = apiKey.filterNot(Char::isWhitespace)
+        val cached = endpointCache.get(endpoint.protocol, endpoint.normalizedBase)
+        val details = ConcurrentHashMap<String, ModelCapabilityCandidate>()
+        withTimeoutOrNull(MODEL_DETAIL_BATCH_TIMEOUT_MS) {
+            coroutineScope {
+                catalog.chunked(MODEL_DETAIL_CONCURRENCY).forEach { batch ->
+                    batch.map { candidate ->
+                        async {
+                            fetchDetail(endpoint, cleanedApiKey, candidate.modelId)?.let {
+                                details[candidate.modelId] = it
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+        }
+        // 缓存落盘失败不应丢弃已经获取成功的模型和参数。
+        if (details.isNotEmpty()) runCatching { endpointCache.put(details.values.toList()) }
+        val pi = fetchPiCapabilities(catalog.map { it.modelId }, endpoint)
+        val community = withTimeoutOrNull(COMMUNITY_CATALOG_TIMEOUT_MS) {
+            modelsDevCatalog.findCatalogCapabilities(
+                modelIds = catalog.map { it.modelId },
+                providerHint = channel.orEmpty(),
+                apiAddress = endpoint.normalizedBase,
+                protocol = endpoint.protocol,
+                fetchRemote = ::fetchCommunityCatalog,
+            )
+        }.orEmpty()
+        // 详情在前，使相同 LIVE 来源的字段优先使用单模型响应；模型展示顺序仍以列表为准。
+        val byModel = (details.values + catalog + pi + cached + community).groupBy { it.modelId.lowercase() }
+        return catalog.flatMap { byModel[it.modelId.lowercase()].orEmpty() }
+    }
+
     suspend fun getCatalog(
         apiUrl: String,
         apiKey: String,
@@ -53,24 +107,9 @@ internal class ModelCatalogService(
         val normalizedModelId = modelId.removePrefix("models/").trim()
         val candidates = mutableListOf<ModelCapabilityCandidate>()
 
-        try {
-            val detailBody = fetchJson(
-                url = buildModelDetailUrl(endpoint, normalizedModelId),
-                endpoint = endpoint,
-                apiKey = cleanedApiKey,
-            )
-            parseModelCatalog(
-                responseBody = detailBody,
-                protocol = endpoint.protocol,
-                apiAddress = endpoint.normalizedBase,
-            ).firstOrNull { it.modelId.equals(normalizedModelId, ignoreCase = true) }
-                ?.let { detail ->
-                    candidates += detail
-                    endpointCache.put(listOf(detail))
-                }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
+        fetchDetail(endpoint, cleanedApiKey, normalizedModelId)?.let { detail ->
+            candidates += detail
+            endpointCache.put(listOf(detail))
         }
 
         try {
@@ -82,23 +121,59 @@ internal class ModelCatalogService(
         } catch (_: Exception) {
         }
 
+        candidates += fetchPiCapabilities(listOf(normalizedModelId), endpoint)
         val community = modelsDevCatalog.findCapabilities(
             modelId = normalizedModelId,
             providerHint = providerHint,
             apiAddress = endpoint.normalizedBase,
             protocol = endpoint.protocol,
-        ) {
-            val response = client.get(MODELS_DEV_URL) {
+            fetchRemote = ::fetchCommunityCatalog,
+        )
+        candidates += community
+        return candidates
+    }
+
+    /** 详情接口不受支持或单个模型请求失败时保留目录结果；取消必须向上传播。 */
+    private suspend fun fetchDetail(
+        endpoint: ModelCatalogEndpoint,
+        apiKey: String,
+        modelId: String,
+    ): ModelCapabilityCandidate? = try {
+        parseModelCatalog(
+            responseBody = fetchJson(buildModelDetailUrl(endpoint, modelId), endpoint, apiKey),
+            protocol = endpoint.protocol,
+            apiAddress = endpoint.normalizedBase,
+        ).firstOrNull { it.modelId.equals(modelId, ignoreCase = true) }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
+    }
+
+    /** 整个目录只下载一次，查询不带用户地址或密钥；超时作为获取失败处理，允许使用 pi 旧缓存。 */
+    private suspend fun fetchPiCapabilities(
+        modelIds: List<String>,
+        endpoint: ModelCatalogEndpoint,
+    ): List<ModelCapabilityCandidate> = piModelCatalog.findCapabilities(modelIds, endpoint.protocol) {
+        withTimeoutOrNull(COMMUNITY_CATALOG_TIMEOUT_MS) {
+            val response = client.get(PI_MODEL_CATALOG_URL) {
                 header(HttpHeaders.Accept, "application/json")
                 header(HttpHeaders.UserAgent, "EveryTalk/1.0 (Android)")
             }
-            if (!response.status.isSuccess()) {
-                throw IOException("models.dev 返回 HTTP ${response.status.value}")
-            }
-            response.readTextAtMost(MAX_MODELS_DEV_RESPONSE_BYTES)
+            if (!response.status.isSuccess()) throw IOException("pi 目录返回 HTTP ${response.status.value}")
+            response.readTextAtMost(MAX_PI_MODEL_CATALOG_BYTES)
+        } ?: throw IOException("pi 目录请求超时")
+    }
+
+    private suspend fun fetchCommunityCatalog(): String {
+        val response = client.get(MODELS_DEV_URL) {
+            header(HttpHeaders.Accept, "application/json")
+            header(HttpHeaders.UserAgent, "EveryTalk/1.0 (Android)")
         }
-        candidates += community
-        return candidates
+        if (!response.status.isSuccess()) {
+            throw IOException("models.dev 返回 HTTP ${response.status.value}")
+        }
+        return response.readTextAtMost(MAX_MODELS_DEV_RESPONSE_BYTES)
     }
 
     private suspend fun fetchAllPages(

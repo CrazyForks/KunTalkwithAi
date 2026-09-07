@@ -228,6 +228,9 @@ object ApiClient {
                 modelsDevCatalog = ModelsDevCatalog(
                     context.applicationContext.cacheDir.resolve("models-dev-v1.json")
                 ),
+                piModelCatalog = PiModelCatalog(
+                    context.applicationContext.cacheDir.resolve("pi-models-v1.json")
+                ),
             )
             isInitialized = true
         }
@@ -497,8 +500,9 @@ object ApiClient {
 
 
     suspend fun getModels(apiUrl: String, apiKey: String, channel: String? = null): List<String> =
-        getModelCatalog(apiUrl, apiKey, channel).map(ModelCapabilityCandidate::modelId)
+        getModelCatalog(apiUrl, apiKey, channel).map(ModelCapabilityCandidate::modelId).distinct()
 
+    /** 获取模型及参数候选；同一模型可有多个来源，展示列表时需按模型 ID 去重。 */
     suspend fun getModelCatalog(
         apiUrl: String,
         apiKey: String,
@@ -507,7 +511,7 @@ object ApiClient {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
-        return modelCatalogService.getCatalog(apiUrl, apiKey, channel)
+        return modelCatalogService.getCatalogWithCapabilities(apiUrl, apiKey, channel)
     }
 
     suspend fun getModelCapabilities(

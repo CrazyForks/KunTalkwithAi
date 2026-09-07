@@ -61,13 +61,11 @@ object AnthropicDirectClient {
     ): Flow<AppStreamEvent> = channelFlow {
         var terminalSent = false
         try {
-            var nativeContextManagementEnabled = shouldUseNativeContextManagement(request)
-            var preserveRestoredCompaction = hasRestoredAnthropicCompaction(request)
-            var resetNativeStateAfterCompletion = preserveRestoredCompaction && !nativeContextManagementEnabled
+            val nativeContextManagementEnabled = shouldUseNativeContextManagement(request)
+            val preserveRestoredCompaction = hasRestoredAnthropicCompaction(request)
+            val resetNativeStateAfterCompletion = preserveRestoredCompaction && !nativeContextManagementEnabled
             var parsed: AnthropicParseResult? = null
-            do {
-                var retryWithoutNativeContextManagement = false
-                client.preparePost(resolveMessagesUrl(request.apiAddress)) {
+            client.preparePost(resolveMessagesUrl(request.apiAddress)) {
                     contentType(ContentType.Application.Json)
                     header("x-api-key", request.apiKey.filterNot(Char::isWhitespace))
                     header("anthropic-version", ANTHROPIC_VERSION)
@@ -89,12 +87,17 @@ object AnthropicDirectClient {
                             nativeContextManagementEnabled &&
                             isUnsupportedNativeContextManagement(response.status.value, errorBody)
                         ) {
-                            Log.w(TAG, "服务端不支持 Anthropic 原生压缩，本次请求关闭后重试")
+                            Log.w(TAG, "服务端不支持 Anthropic 原生压缩，交由 AgentLoop 以独立请求降级重试")
                             unsupportedNativeCompaction += nativeCompactionCapabilityKey(request)
-                            nativeContextManagementEnabled = false
-                            preserveRestoredCompaction = hasRestoredAnthropicCompaction(request)
-                            resetNativeStateAfterCompletion = preserveRestoredCompaction
-                            retryWithoutNativeContextManagement = true
+                            terminalSent = true
+                            send(
+                                AppStreamEvent.Error(
+                                    message = "服务端不支持 Anthropic 原生压缩，正在关闭后重试",
+                                    code = "native_context_unsupported",
+                                    type = "retryable_network",
+                                ),
+                            )
+                            send(AppStreamEvent.Finish("connection_failed"))
                             return@execute
                         }
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "Anthropic")
@@ -105,8 +108,7 @@ object AnthropicDirectClient {
                     }
                     parsed = parseAnthropicSse(response.bodyAsChannel()) { send(it) }
                 }
-                if (terminalSent) return@channelFlow
-            } while (retryWithoutNativeContextManagement)
+            if (terminalSent) return@channelFlow
 
             val completed = parsed ?: error("Anthropic 流未返回解析结果")
             completed.toolCalls.forEach { call ->
@@ -236,11 +238,24 @@ object AnthropicDirectClient {
             put("model", request.model)
             put("max_tokens", maxTokens)
             put("stream", true)
-            if (systemText.isNotBlank()) put("system", systemText)
-            putJsonArray("messages") {
+            // 显式断点兼容 Messages 协议；5 分钟是默认寿命，不额外启用收费更高的 1 小时缓存。
+            if (systemText.isNotBlank()) putJsonArray("system") {
+                addJsonObject {
+                    put("type", "text")
+                    put("text", systemText)
+                    putJsonObject("cache_control") { put("type", "ephemeral") }
+                }
+            }
+            val outgoingMessages = buildList {
                 if (includeRequestMessages) messages.forEach(::add)
                 continuationMessages.forEach(::add)
             }
+            // Runtime Context 每轮被替换，不能成为唯一缓存断点，否则旧请求的断点无法复用。
+            // Adapter 对每个状态快照输出一条独立消息，原生压缩恢复也把它们追加在末尾。
+            val runtimeCount = if (includeRequestMessages && continuationMessages.isEmpty()) {
+                preparedMessages.count(SystemPromptInjector::isRuntimeContext)
+            } else 0
+            put("messages", cacheStableHistory(outgoingMessages, runtimeCount))
             if (nativeContextManagementEnabled) {
                 putJsonObject("context_management") {
                     putJsonArray("edits") {
@@ -281,6 +296,25 @@ object AnthropicDirectClient {
                 toAnthropicToolChoice(request.toolChoice)?.let { put("tool_choice", it) }
             }
         }.toString()
+    }
+
+    /** 只在实际发送的稳定历史末尾加断点，不修改签名、工具配对或保存的原生上下文。 */
+    private fun cacheStableHistory(messages: List<JsonObject>, runtimeCount: Int): JsonArray {
+        val result = messages.toMutableList()
+        for (index in (messages.size - runtimeCount - 1) downTo 0) {
+            val content = messages[index]["content"] as? JsonArray ?: continue
+            val blockIndex = content.indexOfLast { block ->
+                (block as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull in
+                    setOf("text", "image", "tool_use", "tool_result", "document")
+            }
+            if (blockIndex < 0) continue
+            val blocks = content.toMutableList()
+            blocks[blockIndex] = JsonObject(blocks[blockIndex].jsonObject +
+                ("cache_control" to buildJsonObject { put("type", "ephemeral") }))
+            result[index] = JsonObject(messages[index] + ("content" to JsonArray(blocks)))
+            break
+        }
+        return JsonArray(result)
     }
 
     private fun messageText(message: AbstractApiMessage): String? = when (message) {
@@ -568,6 +602,10 @@ object AnthropicDirectClient {
                     block["text"]?.jsonPrimitive?.contentOrNull?.let(state.text::append)
                     block["thinking"]?.jsonPrimitive?.contentOrNull?.let(state.text::append)
                     block["signature"]?.jsonPrimitive?.contentOrNull?.let(state.signature::append)
+                    // tool_use 的 input 还会继续流入；这里只更新状态，不发布不完整的 ToolCall。
+                    if (state.type == "tool_use" && blocks.values.none { it.type == "tool_use" }) {
+                        emitEvent(AppStreamEvent.ExecutionStatusUpdate(TOOL_CALL_WRITING_STATUS))
+                    }
                     blocks[index] = state
                     if (state.type == "redacted_thinking" && !state.redactedData.isNullOrEmpty()) {
                         emitEvent(
@@ -740,13 +778,25 @@ object AnthropicDirectClient {
         previous: TokenUsage?,
         isFinal: Boolean,
     ): TokenUsage? {
+        val cacheRead = usage["cache_read_input_tokens"]?.jsonPrimitive?.longOrNull?.coerceAtLeast(0L)
+            ?: previous?.cachedInputTokens
+        val cacheWrite = usage["cache_creation_input_tokens"]?.jsonPrimitive?.longOrNull?.coerceAtLeast(0L)
+            ?: previous?.cacheWriteTokens
+        // Anthropic input_tokens 仅含未缓存输入；统一模型里的 inputTokens 则含全部输入。
+        // delta 常只发输出量，恢复上一帧未缓存量后再求和，防止缓存量被重复累加。
+        val freshInput = usage["input_tokens"]?.jsonPrimitive?.longOrNull
+            ?: previous?.inputTokens?.let { total ->
+                ((total - (previous.cachedInputTokens ?: 0L)).coerceAtLeast(0L) -
+                    (previous.cacheWriteTokens ?: 0L)).coerceAtLeast(0L)
+            }
+        val totalInput = freshInput?.let {
+            safeTokenAdd(safeTokenAdd(it.coerceAtLeast(0L), cacheRead?.coerceAtLeast(0L) ?: 0L), cacheWrite?.coerceAtLeast(0L) ?: 0L)
+        }
         val parsed = TokenUsage(
-            inputTokens = usage["input_tokens"]?.jsonPrimitive?.longOrNull ?: previous?.inputTokens,
+            inputTokens = totalInput,
             outputTokens = usage["output_tokens"]?.jsonPrimitive?.longOrNull ?: previous?.outputTokens,
-            cachedInputTokens = usage["cache_read_input_tokens"]?.jsonPrimitive?.longOrNull
-                ?: previous?.cachedInputTokens,
-            cacheWriteTokens = usage["cache_creation_input_tokens"]?.jsonPrimitive?.longOrNull
-                ?: previous?.cacheWriteTokens,
+            cachedInputTokens = cacheRead,
+            cacheWriteTokens = cacheWrite,
             isFinal = isFinal,
             source = TokenUsageSource.ANTHROPIC,
         )
@@ -781,6 +831,7 @@ object AnthropicDirectClient {
             )
         }
         if (!hasValidIteration) return null
+        inputTokens = safeTokenAdd(safeTokenAdd(inputTokens, cachedInputTokens), cacheWriteTokens)
         return TokenUsage(
             inputTokens = inputTokens,
             outputTokens = outputTokens,

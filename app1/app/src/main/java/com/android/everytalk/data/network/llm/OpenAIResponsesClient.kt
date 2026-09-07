@@ -18,9 +18,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import kotlinx.coroutines.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 
 object OpenAIResponsesClient {
     private const val TAG = "OpenAIResponsesClient"
+    private val unsupportedNativeContextManagement = ConcurrentHashMap.newKeySet<String>()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     internal fun streamSingleTurn(
@@ -37,16 +39,14 @@ object OpenAIResponsesClient {
         )
         var terminalSent = false
         try {
-            var nativeContextManagementEnabled = shouldUseNativeContextManagement(request)
-            var resetNativeStateAfterCompletion = false
+            val nativeContextManagementEnabled = shouldUseNativeContextManagement(request)
+            val resetNativeStateAfterCompletion = hasRestoredResponsesCompaction(request) && !nativeContextManagementEnabled
             var parsed: ResponsesParseResult? = null
-            do {
-                var retryWithoutNativeContextManagement = false
-                val input = buildInitialResponsesInput(
+            val input = buildInitialResponsesInput(
                     request = request,
                     allowRestoredCompaction = nativeContextManagementEnabled,
                 )
-                client.preparePost(endpoint) {
+            client.preparePost(endpoint) {
                     contentType(ContentType.Application.Json)
                     setBody(
                         buildResponsesPayloadFromInput(
@@ -64,10 +64,17 @@ object OpenAIResponsesClient {
                             nativeContextManagementEnabled &&
                             isUnsupportedNativeContextManagement(response.status.value, errorBody)
                         ) {
-                            Log.w(TAG, "服务端不支持 context_management，本次请求关闭原生压缩后重试")
-                            nativeContextManagementEnabled = false
-                            resetNativeStateAfterCompletion = hasRestoredResponsesCompaction(request)
-                            retryWithoutNativeContextManagement = true
+                            Log.w(TAG, "服务端不支持 context_management，交由 AgentLoop 以独立请求降级重试")
+                            unsupportedNativeContextManagement += nativeContextManagementCapabilityKey(request)
+                            terminalSent = true
+                            send(
+                                AppStreamEvent.Error(
+                                    message = "服务端不支持 context_management，正在关闭后重试",
+                                    code = "native_context_unsupported",
+                                    type = "retryable_network",
+                                ),
+                            )
+                            send(AppStreamEvent.Finish("connection_failed"))
                             return@execute
                         }
                         val result = NetworkUtils.handleApiError(
@@ -86,8 +93,7 @@ object OpenAIResponsesClient {
                         emitEvent = { send(it) },
                     )
                 }
-                if (terminalSent) return@channelFlow
-            } while (retryWithoutNativeContextManagement)
+            if (terminalSent) return@channelFlow
 
             val completed = parsed ?: error("Responses 流未返回可解析结果")
             val management = request.contextManagement
@@ -430,8 +436,25 @@ object OpenAIResponsesClient {
             ?.toList()
             ?: restoredNativeInput(request)
 
-    private fun hasRestoredResponsesCompaction(request: ChatRequest): Boolean =
-        activeNativeInput(request)?.let(::latestCompactionItemId) != null
+    private fun hasRestoredResponsesCompaction(request: ChatRequest): Boolean {
+        val continuation = request.localProviderContinuation
+            ?.takeIf { it.protocol == com.android.everytalk.data.DataClass.ModelParameterProtocol.CODEX }
+            ?.compactedContextJson
+            ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
+            ?.toList()
+        if (continuation?.let(::latestCompactionItemId) != null) return true
+        val management = request.contextManagement ?: return false
+        val state = management.restoredState ?: return false
+        if (state.configId != management.configId ||
+            !state.provider.equals(request.provider, ignoreCase = true) ||
+            !state.channel.equals(request.channel, ignoreCase = true) ||
+            !state.model.equals(request.model, ignoreCase = true)
+        ) return false
+        return state.openAiResponsesInputJson
+            ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
+            ?.toList()
+            ?.let(::latestCompactionItemId) != null
+    }
 
     private suspend fun parseResponsesSSEStream(
         channel: ByteReadChannel,
@@ -455,7 +478,7 @@ object OpenAIResponsesClient {
         val toolCallsMap = mutableMapOf<String, ResponsesToolCallState>()
 
         /** Responses 的同一调用按 output_index 绑定；终止事件没有 index 时再按真实 ID 对账。 */
-        fun upsertToolCall(
+        suspend fun upsertToolCall(
             outputIndex: Int?,
             callId: String?,
             itemId: String?,
@@ -464,6 +487,10 @@ object OpenAIResponsesClient {
             replaceArguments: Boolean,
             namespace: String?,
         ): ResponsesToolCallState? {
+            // added 和 arguments.delta 都可能是兼容接口发来的首个调用信号。
+            if (!hasToolCalls) {
+                emitEvent(AppStreamEvent.ExecutionStatusUpdate(TOOL_CALL_WRITING_STATUS))
+            }
             val compositeId = responsesToolCallId(callId, itemId)
             val indexedKey = outputIndex?.let { "index:$it" }
             val existingKey = indexedKey?.takeIf(toolCallsMap::containsKey)
@@ -928,7 +955,11 @@ object OpenAIResponsesClient {
         request.channel.contains("codex", ignoreCase = true) &&
             request.contextManagement?.autoCompressionEnabled == true &&
             request.contextManagement.compactThresholdTokens > 0L &&
-            isOfficialOpenAIResponsesAddress(resolvedOpenAIApiAddress(request))
+            isOfficialOpenAIResponsesAddress(resolvedOpenAIApiAddress(request)) &&
+            nativeContextManagementCapabilityKey(request) !in unsupportedNativeContextManagement
+
+    private fun nativeContextManagementCapabilityKey(request: ChatRequest): String =
+        "${resolvedOpenAIApiAddress(request).lowercase()}|${request.model.trim().lowercase()}"
 
     private fun isUnsupportedNativeContextManagement(status: Int, errorBody: String): Boolean {
         if (status != 400 && status != 422) return false

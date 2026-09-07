@@ -145,10 +145,8 @@ fun ModelParameters.toThinkingConfig(channel: String, model: String): ThinkingCo
     val protocol = modelParameterProtocol(channel)
     val normalizedModel = model.removePrefix("models/").trim()
     val inferredCapability = resolvedCapability
+        ?.takeUnless { it.reasoningSource == ModelCapabilitySource.OFFICIAL_CATALOG }
         ?.takeIf { it.modelId.removePrefix("models/").trim().equals(normalizedModel, ignoreCase = true) }
-        ?: officialModelCapability(model, protocol)?.let { candidate ->
-            resolveModelCapability(model, protocol, "", listOf(candidate))
-        }
         ?: familyModelCapability(model, protocol)?.let { candidate ->
             resolveModelCapability(model, protocol, "", listOf(candidate))
         }

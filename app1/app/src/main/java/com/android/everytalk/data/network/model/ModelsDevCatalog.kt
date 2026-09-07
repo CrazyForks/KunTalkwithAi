@@ -6,11 +6,6 @@ import com.android.everytalk.data.DataClass.ModelCapabilitySource
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import java.io.File
 import java.net.URI
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -38,14 +33,7 @@ internal class ModelsDevCatalog(
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val ttlMillis: Long = MODEL_CAPABILITY_CACHE_TTL_MILLIS,
 ) {
-    private data class MemoryEntry(
-        val index: ModelsDevIndex,
-        val loadedAtEpochMillis: Long,
-    )
-
-    private val mutex = Mutex()
-    @Volatile
-    private var memoryEntry: MemoryEntry? = null
+    private val cache = RemoteModelCatalogCache(cacheFile, ttlMillis, nowEpochMillis, ::parseModelsDevCatalog)
 
     suspend fun findCapabilities(
         modelId: String,
@@ -54,7 +42,30 @@ internal class ModelsDevCatalog(
         protocol: ModelParameterProtocol,
         fetchRemote: suspend () -> String,
     ): List<ModelCapabilityCandidate> {
-        val index = loadIndex(fetchRemote) ?: return emptyList()
+        return findCatalogCapabilities(listOf(modelId), providerHint, apiAddress, protocol, fetchRemote)
+    }
+
+    /** 一次加载社区目录后匹配整批模型；即使远端不可用，也不会逐模型重复下载。 */
+    suspend fun findCatalogCapabilities(
+        modelIds: List<String>,
+        providerHint: String,
+        apiAddress: String,
+        protocol: ModelParameterProtocol,
+        fetchRemote: suspend () -> String,
+    ): List<ModelCapabilityCandidate> {
+        val index = cache.load(fetchRemote) ?: return emptyList()
+        return modelIds.flatMap { modelId ->
+            matchCapabilities(index, modelId, providerHint, apiAddress, protocol)
+        }
+    }
+
+    private fun matchCapabilities(
+        index: ModelsDevIndex,
+        modelId: String,
+        providerHint: String,
+        apiAddress: String,
+        protocol: ModelParameterProtocol,
+    ): List<ModelCapabilityCandidate> {
         val normalized = normalizeCatalogModelId(modelId)
         val candidates = buildList {
             addAll(index.byModelId[normalized].orEmpty())
@@ -74,67 +85,6 @@ internal class ModelsDevCatalog(
         return listOf(mergeModelsDevEntries(modelId, protocol, selected))
     }
 
-    private suspend fun loadIndex(fetchRemote: suspend () -> String): ModelsDevIndex? {
-        val now = nowEpochMillis()
-        memoryEntry?.takeIf { it.loadedAtEpochMillis >= now - ttlMillis }?.let { return it.index }
-        return mutex.withLock {
-            val lockedNow = nowEpochMillis()
-            memoryEntry?.takeIf { it.loadedAtEpochMillis >= lockedNow - ttlMillis }?.let {
-                return@withLock it.index
-            }
-            val diskText = readDiskText()
-            val diskTimestamp = cacheFile.lastModified().takeIf { it > 0L } ?: 0L
-            if (diskText != null && diskTimestamp >= lockedNow - ttlMillis) {
-                parseModelsDevCatalog(diskText, diskTimestamp)?.let { index ->
-                    memoryEntry = MemoryEntry(index, diskTimestamp)
-                    return@withLock index
-                }
-            }
-
-            val remoteIndex = try {
-                val body = fetchRemote()
-                parseModelsDevCatalog(body, lockedNow)?.also {
-                    writeDiskTextAtomically(body)
-                    memoryEntry = MemoryEntry(it, lockedNow)
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                null
-            }
-            remoteIndex ?: diskText?.let { stale ->
-                parseModelsDevCatalog(stale, diskTimestamp).also { index ->
-                    if (index != null) memoryEntry = MemoryEntry(index, lockedNow)
-                }
-            }
-        }
-    }
-
-    private fun readDiskText(): String? = runCatching {
-        cacheFile.takeIf(File::isFile)?.readText(Charsets.UTF_8)
-    }.getOrNull()
-
-    private fun writeDiskTextAtomically(body: String) {
-        runCatching {
-            cacheFile.parentFile?.mkdirs()
-            val temporary = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
-            temporary.writeText(body, Charsets.UTF_8)
-            try {
-                Files.move(
-                    temporary.toPath(),
-                    cacheFile.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (_: Exception) {
-                Files.move(
-                    temporary.toPath(),
-                    cacheFile.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            }
-        }
-    }
 }
 
 internal fun parseModelsDevCatalog(

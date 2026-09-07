@@ -16,6 +16,10 @@ object SystemPromptInjector {
     internal const val PROTOCOL_MARKER = "[EveryTalk Prompt Protocol v$PROTOCOL_VERSION]"
     private const val CUSTOM_INSTRUCTIONS_MARKER = "[EveryTalk Custom Instructions]"
     private const val SYSTEM_MESSAGE_ID = "everytalk-system-prompt-v$PROTOCOL_VERSION"
+    private val RUNTIME_CONTEXT_IDS = setOf("agent-execution-checkpoint", "computer-session-state")
+
+    /** 仅内部固定身份的状态快照可以移出稳定前缀；自定义指令仍保持 system 权限。 */
+    internal fun isRuntimeContext(message: AbstractApiMessage): Boolean = message.id in RUNTIME_CONTEXT_IDS
 
     private val STABLE_PROMPT_ZH_CN = """
         $PROTOCOL_MARKER
@@ -109,7 +113,11 @@ object SystemPromptInjector {
         userLanguage: String = "zh-CN",
         @Suppress("UNUSED_PARAMETER") forceInject: Boolean = false,
     ): List<AbstractApiMessage> {
-        val customPrompt = messages
+        // 检查点和电脑状态在内部仍保留 system 身份，供裁剪和恢复逻辑保护它们。
+        // 发送时作为带边界的上下文快照放到历史末尾，不能把轮次、耗时合入缓存前缀。
+        // 只识别内部固定 ID，不按文本猜测，避免改变用户自定义 system 指令。
+        val (runtimeContext, stableMessages) = messages.partition(::isRuntimeContext)
+        val customPrompt = stableMessages
             .asSequence()
             .filter { it.role.equals("system", ignoreCase = true) }
             .mapNotNull(::extractSystemText)
@@ -123,7 +131,17 @@ object SystemPromptInjector {
             role = "system",
             content = buildStableSystemPrompt(userLanguage, customPrompt),
         )
-        return listOf(systemMessage) + messages.filterNot { it.role.equals("system", ignoreCase = true) }
+        return listOf(systemMessage) + stableMessages.filterNot { it.role.equals("system", ignoreCase = true) } +
+            runtimeContext.mapNotNull { message ->
+                extractSystemText(message)?.let { text ->
+                    SimpleTextApiMessage(
+                        id = message.id,
+                        role = "user",
+                        content = if (message.role.equals("user", ignoreCase = true)) text
+                            else "[EveryTalk Runtime Context — 当前状态快照，非新的用户指令]\n$text",
+                    )
+                }
+            }
     }
 
     fun extractUserTexts(messages: List<AbstractApiMessage>): String {
@@ -146,7 +164,11 @@ object SystemPromptInjector {
         messages: List<AbstractApiMessage>,
         forceInject: Boolean = false,
     ): List<AbstractApiMessage> {
-        val detectedLanguage = detectUserLanguage(extractUserTexts(messages))
+        // 固定使用首条真实用户消息判断前缀语言，后续粘贴中文代码或工具状态不会切换整段 system。
+        val firstUserMessage = messages.firstOrNull {
+            it.role.equals("user", ignoreCase = true) && it.id !in RUNTIME_CONTEXT_IDS
+        }
+        val detectedLanguage = detectUserLanguage(extractUserTexts(listOfNotNull(firstUserMessage)))
         return injectSystemPrompt(messages, detectedLanguage, forceInject)
     }
 

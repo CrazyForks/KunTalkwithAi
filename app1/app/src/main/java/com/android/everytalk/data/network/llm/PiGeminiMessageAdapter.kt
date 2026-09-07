@@ -392,7 +392,8 @@ internal object PiGeminiMessageAdapter {
     }
 
     /**
-     * 每个 Gemini Part 都必须初始化 data oneof；签名单独成块时用空 text 承载。
+     * 每个 Gemini Part 都必须初始化 data oneof。
+     * 原始 REST/代理链不能用空 text 承载签名，空字符串可能在 JSON 到 protobuf 时失去 oneof presence。
      * FunctionResponse.parts 也是 Part 数组，必须递归校验，不能只校验 Content 顶层。
      */
     private fun JsonObject.normalizeForRequest(): JsonObject =
@@ -420,6 +421,11 @@ internal object PiGeminiMessageAdapter {
             }
             require(initializedFields.size == 1) {
                 "$path 必须且只能初始化一个 Gemini Part data 字段"
+            }
+            if (initializedFields.single() == "text") {
+                require(!part["text"]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()) {
+                    "$path 的 text 不能为空"
+                }
             }
             val functionResponse = part["functionResponse"] as? JsonObject ?: return
             (functionResponse["parts"] as? JsonArray).orEmpty().forEachIndexed { index, nested ->
@@ -455,17 +461,17 @@ internal object PiGeminiMessageAdapter {
         val initializedFields = PART_DATA_FIELDS.filter { field ->
             normalizedPart[field]?.let { it !is JsonNull } == true
         }
-        if (initializedFields.isEmpty()) {
-            val signature = normalizedPart["thoughtSignature"]?.jsonPrimitive?.contentOrNull
-            return if (signature.isNullOrEmpty()) {
-                null
-            } else {
-                JsonObject(normalizedPart.toMutableMap().apply { put("text", JsonPrimitive("")) })
-            }
-        }
+        // Pi 的 Google 流解析器只接收真实带 text/functionCall 的 Part。
+        // 服务端偶尔会单独流出 thoughtSignature 元数据，这不是合法 data oneof，必须丢弃；
+        // 不能临时补空 text，因为 REST JSON 到 protobuf 时空字符串可能仍被当成 oneof 未初始化。
+        // 即使服务端显式返回 `text: "" + thoughtSignature`，原始 REST 回放也必须丢弃该空块。
+        if (initializedFields.isEmpty()) return null
         check(initializedFields.size == 1) {
             "Gemini content part 必须且只能初始化一个 data 字段"
         }
+        if (initializedFields.single() == "text" &&
+            normalizedPart["text"]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()
+        ) return null
 
         val functionResponse = normalizedPart["functionResponse"] as? JsonObject
         if (functionResponse != null && functionResponse["parts"] is JsonArray) {

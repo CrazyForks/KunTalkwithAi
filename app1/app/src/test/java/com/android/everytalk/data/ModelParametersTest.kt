@@ -6,6 +6,9 @@ import com.android.everytalk.data.DataClass.DEFAULT_AUTO_CONTEXT_COMPRESSION_THR
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_OUTPUT_TOKENS
 import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
+import com.android.everytalk.data.DataClass.ModelCapabilitySource
+import com.android.everytalk.data.DataClass.resolveModelCapability
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.modelParameterProtocol
@@ -31,7 +34,8 @@ class ModelParametersTest {
 
         assertEquals("medium", parameters.reasoningEffort)
         assertEquals("medium", parameters.toThinkingConfig("Codex", "gpt-5.6")?.reasoningEffort)
-        assertEquals("medium", parameters.toThinkingConfig("Anthropic", "claude-sonnet-4-6")?.reasoningEffort)
+        assertEquals("medium", parameters.copy(resolvedCapability = fetchedClaudeCapability())
+            .toThinkingConfig("Anthropic", "claude-sonnet-4-6")?.reasoningEffort)
         assertEquals("medium", parameters.toThinkingConfig("Gemini", "gemini-3-flash")?.thinkingLevel)
         assertEquals(DEFAULT_MAX_CONTEXT_TOKENS, parameters.maxContextTokens)
         assertEquals(false, parameters.autoContextCompressionEnabled)
@@ -90,11 +94,27 @@ class ModelParametersTest {
 
     @Test
     fun `官方渠道不支持的思考程度回退到medium`() {
-        val thinking = ModelParameters(reasoningEffort = "ultra")
+        val thinking = ModelParameters(reasoningEffort = "ultra", resolvedCapability = fetchedClaudeCapability())
             .toThinkingConfig("Anthropic", "claude-sonnet-4-6")
 
         assertEquals("medium", thinking?.reasoningEffort)
     }
+
+    @Test
+    fun `未获取能力时不再用内置Claude规格推断effort支持`() {
+        assertNull(ModelParameters().toThinkingConfig("Anthropic", "claude-sonnet-4-6"))
+        val legacy = fetchedClaudeCapability().copy(reasoningSource = ModelCapabilitySource.OFFICIAL_CATALOG)
+        assertNull(ModelParameters(resolvedCapability = legacy).toThinkingConfig("Anthropic", "claude-sonnet-4-6"))
+    }
+
+    private fun fetchedClaudeCapability() = resolveModelCapability(
+        "claude-sonnet-4-6", ModelParameterProtocol.ANTHROPIC, "https://proxy.example",
+        listOf(ModelCapabilityCandidate(
+            modelId = "claude-sonnet-4-6", protocol = ModelParameterProtocol.ANTHROPIC,
+            supportsReasoning = true, reasoningEfforts = setOf("low", "medium", "high", "max"),
+            source = ModelCapabilitySource.PI_CATALOG,
+        )),
+    )
 
     @Test
     fun `openai compatible preset keeps JSON types`() {

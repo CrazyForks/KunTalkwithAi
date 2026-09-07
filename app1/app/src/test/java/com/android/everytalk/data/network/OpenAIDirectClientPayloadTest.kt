@@ -41,11 +41,11 @@ class OpenAIDirectClientPayloadTest {
     }
 
     @Test
-    fun `compatible endpoint should not receive OpenAI cache fields`() {
+    fun `兼容接口请求流式用量但不附加官方专属缓存键`() {
         val payload = buildPayload(request(apiAddress = "https://example.com/v1", model = "gpt-5.4"))
 
         assertFalse(payload.contains("prompt_cache_key"))
-        assertFalse(payload.contains("stream_options"))
+        assertTrue(payload.contains("\"stream_options\":{\"include_usage\":true}"))
     }
 
     @Test

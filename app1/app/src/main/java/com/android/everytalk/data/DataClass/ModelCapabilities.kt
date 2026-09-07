@@ -7,7 +7,9 @@ import kotlinx.serialization.Serializable
 enum class ModelCapabilitySource {
     USER_OVERRIDE,
     LIVE_ENDPOINT,
+    // 仅兼容旧配置的序列化标记，已移除内置规格表，不再参与参数选择。
     OFFICIAL_CATALOG,
+    PI_CATALOG,
     LOCAL_CACHE,
     COMMUNITY_CATALOG,
     FAMILY_FALLBACK,
@@ -86,6 +88,7 @@ fun resolveModelCapability(
     val endpointIdentity = normalizeModelEndpointIdentity(apiAddress)
     val applicableCandidates = candidates
         .asSequence()
+        .filter { it.source != ModelCapabilitySource.OFFICIAL_CATALOG && it.cachedSource != ModelCapabilitySource.OFFICIAL_CATALOG }
         .filter { it.protocol == protocol }
         .filter { it.modelId.removePrefix("models/").trim().equals(normalizedModelId, ignoreCase = true) }
         .filter { candidate ->
@@ -145,11 +148,12 @@ fun resolveModelCapability(
 private fun sourcePriority(source: ModelCapabilitySource): Int = when (source) {
     ModelCapabilitySource.USER_OVERRIDE -> 0
     ModelCapabilitySource.LIVE_ENDPOINT -> 1
-    ModelCapabilitySource.OFFICIAL_CATALOG -> 2
+    ModelCapabilitySource.PI_CATALOG -> 2
     ModelCapabilitySource.LOCAL_CACHE -> 3
     ModelCapabilitySource.COMMUNITY_CATALOG -> 4
     ModelCapabilitySource.FAMILY_FALLBACK -> 5
     ModelCapabilitySource.CONSERVATIVE_DEFAULT -> 6
+    ModelCapabilitySource.OFFICIAL_CATALOG -> Int.MAX_VALUE
 }
 
 fun ApiConfig.withModelCapabilityDefaults(
@@ -177,7 +181,6 @@ fun ApiConfig.withModelCapabilityDefaults(
         apiAddress = address,
         candidates = candidates + listOfNotNull(
             userOverride,
-            officialModelCapability(model, protocol),
             familyModelCapability(model, protocol),
         ),
     )

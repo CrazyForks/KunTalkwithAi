@@ -399,11 +399,11 @@ object GeminiDirectClient {
                                         val isThought = partObj["thought"]?.jsonPrimitive?.booleanOrNull == true
                                         val textContent = partObj["text"]?.jsonPrimitive?.contentOrNull
                                         
-                                        if (isThought && (!textContent.isNullOrEmpty() || thoughtSignature != null)) {
+                                        if (isThought && !textContent.isNullOrEmpty()) {
                                             if (!reasoningStarted) reasoningStarted = true
                                             fullReasoning.append(textContent.orEmpty())
                                             emitEvent(AppStreamEvent.Reasoning(textContent.orEmpty(), thoughtSignature))
-                                        } else if (thoughtSignature != null && textContent != null) {
+                                        } else if (thoughtSignature != null && !textContent.isNullOrEmpty()) {
                                             if (reasoningStarted && !reasoningFinished) {
                                                 emitEvent(AppStreamEvent.ReasoningFinish(null))
                                                 reasoningFinished = true
@@ -557,9 +557,12 @@ object GeminiDirectClient {
         val role = incoming["role"] ?: current?.get("role") ?: JsonPrimitive("model")
         val parts = (current?.get("parts") as? JsonArray).orEmpty().toMutableList()
         (incoming["parts"] as? JsonArray).orEmpty().forEach { incomingPart ->
-            val incomingObject = incomingPart as? JsonObject
+            val incomingObject = incomingPart as? JsonObject ?: return@forEach
+            // 对齐 Pi 的 Google 流解析器：没有 text、functionCall 或其他 data oneof 的
+            // 元数据碎片不是一个内容块。尤其不能把 thoughtSignature-only 碎片存进下一轮上下文。
+            if (!incomingObject.hasGeminiPartData()) return@forEach
             val previousObject = parts.lastOrNull() as? JsonObject
-            if (incomingObject != null && previousObject != null &&
+            if (previousObject != null &&
                 incomingObject.isGeminiTextDelta() && previousObject.isGeminiTextDelta() &&
                 incomingObject.isThoughtPart() == previousObject.isThoughtPart()
             ) {
@@ -579,7 +582,7 @@ object GeminiDirectClient {
                     if (incomingObject.isThoughtPart()) put("thought", JsonPrimitive(true))
                 })
             } else {
-                parts += incomingPart
+                parts += incomingObject
             }
         }
         return buildJsonObject {
@@ -588,10 +591,18 @@ object GeminiDirectClient {
         }
     }
 
-    /** 只有恰好一个 text data 字段的 Part 才能合并；签名-only Part 必须保持独立。 */
+    /** 只有恰好一个非空 text data 字段的 Part 才能合并。 */
     private fun JsonObject.isGeminiTextDelta(): Boolean =
         PART_DATA_FIELDS.count { field -> this[field]?.let { it !is JsonNull } == true } == 1 &&
-            this["text"]?.let { it !is JsonNull } == true
+            !this["text"]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()
+
+    private fun JsonObject.hasGeminiPartData(): Boolean =
+        PART_DATA_FIELDS.any { field ->
+            when (field) {
+                "text" -> !this[field]?.jsonPrimitive?.contentOrNull.isNullOrEmpty()
+                else -> this[field]?.let { it !is JsonNull } == true
+            }
+        }
 
     private fun JsonObject.isThoughtPart(): Boolean =
         this["thought"]?.jsonPrimitive?.booleanOrNull == true

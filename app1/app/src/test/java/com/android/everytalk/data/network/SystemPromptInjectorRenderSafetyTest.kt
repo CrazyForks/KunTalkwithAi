@@ -8,6 +8,27 @@ import org.junit.Test
 
 class SystemPromptInjectorRenderSafetyTest {
     @Test
+    fun `动态检查点变化时稳定前缀不变且重复注入不重复包装`() {
+        val history = listOf(
+            SimpleTextApiMessage(id = "custom", role = "system", content = "遵守用户约束"),
+            SimpleTextApiMessage(id = "user-1", role = "user", content = "hello"),
+            SimpleTextApiMessage(id = "assistant-1", role = "assistant", content = "ready"),
+        )
+        fun project(turn: Int) = SystemPromptInjector.smartInjectSystemPrompt(history + listOf(
+            SimpleTextApiMessage(id = "agent-execution-checkpoint", role = "system", content = "准备第 $turn 轮"),
+            SimpleTextApiMessage(id = "computer-session-state", role = "system", content = "已运行 $turn 秒"),
+        ))
+        val first = project(1)
+        val next = project(2)
+        assertEquals(first.dropLast(2), next.dropLast(2))
+        assertEquals(listOf("user", "user"), next.takeLast(2).map { it.role })
+        assertTrue((next.last() as SimpleTextApiMessage).content.contains("已运行 2 秒"))
+        assertEquals(next, SystemPromptInjector.smartInjectSystemPrompt(next))
+        assertEquals(first.first(), SystemPromptInjector.smartInjectSystemPrompt(history +
+            SimpleTextApiMessage(role = "user", content = "后续中文问题")).first())
+    }
+
+    @Test
     fun `系统提示要求工具调用之间输出可见过程说明`() {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")

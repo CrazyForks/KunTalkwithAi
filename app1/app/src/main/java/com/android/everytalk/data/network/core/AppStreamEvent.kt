@@ -11,6 +11,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+/** 收到工具调用开头、参数尚未完整时的展示状态；它不代表工具已经开始执行。 */
+internal const val TOOL_CALL_WRITING_STATUS = "正在编写"
+
 @Serializable
 enum class TokenUsageSource {
     OPENAI_CHAT,
@@ -28,6 +31,7 @@ enum class NativeContextCompactionKind {
 
 @Serializable
 data class TokenUsage(
+    /** 全部输入，包含缓存读取和缓存写入；Provider 的独立计数由适配器归一化。 */
     val inputTokens: Long? = null,
     val outputTokens: Long? = null,
     val reasoningTokens: Long? = null,
@@ -105,7 +109,7 @@ sealed class AppStreamEvent {
         val retainedTrace: List<ExecutionTraceEvent> = emptyList(),
     ) : AppStreamEvent()
 
-    /** Pi follow-up 已从持久化 Pending 队列原子进入当前 AgentRun。 */
+    /** 队列用户指令（follow-up 或 steering）已持久化并进入当前 Run，后续输出从此分段。 */
     @Serializable
     @SerialName("agent_follow_up_accepted")
     data class AgentFollowUpAccepted(

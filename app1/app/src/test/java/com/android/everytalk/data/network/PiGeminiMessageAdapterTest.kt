@@ -471,6 +471,10 @@ class PiGeminiMessageAdapterTest {
                         add(buildJsonObject { put("thought", true) })
                         add(buildJsonObject { put("thoughtSignature", "c2ln") })
                         add(buildJsonObject { put("text", JsonNull) })
+                        add(buildJsonObject {
+                            put("text", "")
+                            put("thoughtSignature", "c2ln")
+                        })
                         add(buildJsonObject { put("functionCall", buildJsonObject { put("name", "exec") }) })
                     })
                 })

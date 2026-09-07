@@ -80,10 +80,13 @@ class AnthropicDirectClientTest {
 
         assertEquals("claude-sonnet-4-5", payload.getValue("model").jsonPrimitive.content)
         assertEquals(4096, payload.getValue("max_tokens").jsonPrimitive.content.toInt())
-        assertTrue(payload.getValue("system").jsonPrimitive.content.contains("只回答事实"))
+        val system = payload.getValue("system").jsonArray.single().jsonObject
+        assertTrue(system.getValue("text").jsonPrimitive.content.contains("只回答事实"))
+        assertEquals("ephemeral", system.getValue("cache_control").jsonObject.getValue("type").jsonPrimitive.content)
         assertEquals(3, payload.getValue("messages").jsonArray.size)
         val lastContent = payload.getValue("messages").jsonArray.last().jsonObject.getValue("content").jsonArray
         assertEquals("image", lastContent.last().jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("ephemeral", lastContent.last().jsonObject.getValue("cache_control").jsonObject.getValue("type").jsonPrimitive.content)
         assertEquals("image/png", lastContent.last().jsonObject.getValue("source").jsonObject.getValue("media_type").jsonPrimitive.content)
         val tool = payload.getValue("tools").jsonArray.single().jsonObject
         assertEquals("weather", tool.getValue("name").jsonPrimitive.content)
@@ -530,11 +533,11 @@ class AnthropicDirectClientTest {
             val native = events.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single()
             assertEquals(24_000L, native.estimatedTokens)
             val billedUsage = events.filterIsInstance<AppStreamEvent.Usage>().last().usage
-            assertEquals(203_000L, billedUsage.inputTokens)
+            assertEquals(220_000L, billedUsage.inputTokens)
             assertEquals(4_500L, billedUsage.outputTokens)
             assertEquals(15_000L, billedUsage.cachedInputTokens)
             assertEquals(2_000L, billedUsage.cacheWriteTokens)
-            assertEquals(207_500L, billedUsage.totalTokens)
+            assertEquals(224_500L, billedUsage.totalTokens)
             val canonicalMessage = Json.parseToJsonElement(native.inputJson).jsonArray.single().jsonObject
             assertEquals("assistant", canonicalMessage.getValue("role").jsonPrimitive.content)
             val content = canonicalMessage.getValue("content").jsonArray
@@ -630,6 +633,24 @@ class AnthropicDirectClientTest {
         }
 
         try {
+            val firstEvents = AnthropicDirectClient.streamChatDirect(
+                client,
+                request(
+                    model = "claude-fallback-test",
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+            ).toList()
+            assertEquals(1, requestCount)
+            assertTrue(firstEvents.filterIsInstance<AppStreamEvent.Error>().any {
+                it.code == "native_context_unsupported" && it.type == "retryable_network"
+            })
+
             val events = AnthropicDirectClient.streamChatDirect(
                 client,
                 request(
@@ -719,10 +740,16 @@ class AnthropicDirectClientTest {
         )
 
         try {
-            val events = AnthropicDirectClient.streamChatDirect(
+            val firstEvents = AnthropicDirectClient.streamChatDirect(
                 client,
                 chatRequest,
             ).toList()
+            assertEquals(1, requestCount)
+            assertTrue(firstEvents.filterIsInstance<AppStreamEvent.Error>().any {
+                it.code == "native_context_unsupported" && it.type == "retryable_network"
+            })
+
+            val events = AnthropicDirectClient.streamChatDirect(client, chatRequest).toList()
 
             assertEquals(2, requestCount)
             assertEquals(listOf("compact-2026-01-12", "compact-2026-01-12"), betaHeaders)

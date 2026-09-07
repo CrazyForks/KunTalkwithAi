@@ -89,7 +89,7 @@ class GeminiDirectClientPayloadTest {
     }
 
     @Test
-    fun `普通文本轮也恢复原生空签名块`() {
+    fun `普通文本轮删除原生空文本签名块`() {
         val request = ChatRequest(
             messages = listOf(
                 SimpleTextApiMessage(role = "user", content = "总结"),
@@ -113,15 +113,13 @@ class GeminiDirectClientPayloadTest {
             .jsonObject.getValue("contents").jsonArray
         val modelParts = contents[1].jsonObject.getValue("parts").jsonArray
 
-        assertEquals("", modelParts.first().jsonObject.getValue("text").jsonPrimitive.content)
-        assertEquals(
-            "ZW1wdHktc2ln",
-            modelParts.first().jsonObject.getValue("thoughtSignature").jsonPrimitive.content,
-        )
+        assertEquals(1, modelParts.size)
+        assertEquals("完成", modelParts.single().jsonObject.getValue("text").jsonPrimitive.content)
+        assertTrue(modelParts.none { it.jsonObject.containsKey("thoughtSignature") })
     }
 
     @Test
-    fun `原生签名单独成Part时补空text并删除纯空Part`() {
+    fun `原生签名单独成Part时删除非法元数据Part`() {
         val request = ChatRequest(
             messages = listOf(
                 SimpleTextApiMessage(role = "user", content = "执行命令"),
@@ -151,9 +149,9 @@ class GeminiDirectClientPayloadTest {
         val modelParts = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
             .jsonObject.getValue("contents").jsonArray[1].jsonObject
             .getValue("parts").jsonArray.map { it.jsonObject }
-        val signedPart = modelParts.single { it.containsKey("thoughtSignature") }
-
-        assertEquals("", signedPart.getValue("text").jsonPrimitive.content)
+        assertTrue(modelParts.none { it.containsKey("thoughtSignature") })
+        assertEquals(1, modelParts.size)
+        assertTrue(modelParts.single().containsKey("functionCall"))
         assertTrue(modelParts.none(JsonObject::isEmpty))
         assertTrue(modelParts.all { part ->
             listOf("text", "inlineData", "fileData", "functionCall", "functionResponse", "executableCode", "codeExecutionResult")
@@ -498,7 +496,7 @@ class GeminiDirectClientPayloadTest {
     }
 
     @Test
-    fun `同模型恢复空思考签名块且跨模型剥离签名`() {
+    fun `同模型也删除空思考签名块且保留工具签名`() {
         val contentParts = listOf(
             AgentAssistantContentApiPart.Reasoning("", "c2lnbmF0dXJl"),
             AgentAssistantContentApiPart.ToolCall(
@@ -536,7 +534,7 @@ class GeminiDirectClientPayloadTest {
         val sameModel = payload("gemini-3.7-flash").toString()
         val otherModel = payload("gemini-3.8-flash").toString()
 
-        assertTrue(sameModel.contains("c2lnbmF0dXJl"))
+        assertFalse(sameModel.contains("c2lnbmF0dXJl"))
         assertTrue(sameModel.contains("dG9vbC1zaWc="))
         assertFalse(otherModel.contains("thoughtSignature"))
         assertTrue(otherModel.contains("functionCall"))

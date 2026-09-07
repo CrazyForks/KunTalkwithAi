@@ -92,6 +92,13 @@ sealed class ExecutionTraceEvent {
     /** 该事件第一次进入执行链的时间。旧消息没有此字段时保持 null。 */
     abstract val startedAtMillis: Long?
 
+    /** 同一 Run 接收新用户指令的边界。只引用真实气泡 ID，不复制消息或新建 Run。 */
+    @Serializable
+    data class UserMessageBoundary(
+        val messageId: String,
+        override val startedAtMillis: Long? = null,
+    ) : ExecutionTraceEvent()
+
     /** 模型对用户可见的正式正文，相邻增量会合并为一段。 */
     @Serializable
     data class Content(
@@ -255,7 +262,7 @@ fun hasReviewableExecutionProcess(
     executionStatus: String? = null,
 ): Boolean = !reasoningText.isNullOrBlank() ||
     executionSteps.isNotEmpty() ||
-    executionTrace.any { it !is ExecutionTraceEvent.Content } ||
+    executionTrace.any { it is ExecutionTraceEvent.Reasoning || it is ExecutionTraceEvent.Tool } ||
     !webSearchResults.isNullOrEmpty() ||
     !executionStatus.isNullOrBlank()
 

@@ -56,6 +56,74 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `工具参数尚未完整时三种流协议立即发布编写状态`() = runBlocking {
+        val starts = mapOf(
+            "OpenAI" to """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"exec","arguments":"{\"command\":"}}]}}]}""",
+            "Responses" to """{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item-1","call_id":"call-1","name":"exec","arguments":""}}""",
+            "Anthropic" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-1","name":"exec","input":{}}}""",
+        )
+        val endings = mapOf(
+            "OpenAI" to listOf(
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"pwd\"}"}}]}}]}""",
+                """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+            ),
+            "Responses" to listOf(
+                """{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item-1","delta":"{\"command\":\"pwd\"}"}""",
+                """{"type":"response.completed"}""",
+            ),
+            "Anthropic" to listOf(
+                """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"pwd\"}"}}""",
+                """{"type":"content_block_stop","index":0}""",
+                """{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""",
+                """{"type":"message_stop"}""",
+            ),
+        )
+        for ((protocol, start) in starts) {
+            val channel = ByteChannel(autoFlush = true)
+            val events = mutableListOf<AppStreamEvent>()
+            val writing = CompletableDeferred<Unit>()
+            val client = HttpClient(MockEngine {
+                respond(channel, headers = Headers.build {
+                    append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString())
+                })
+            })
+            val job = launch {
+                val flow = when (protocol) {
+                    "OpenAI" -> OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI"))
+                    "Responses" -> OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI"))
+                    else -> AnthropicDirectClient.streamChatDirect(client, request("Anthropic", "Anthropic"))
+                }
+                flow.collect { event ->
+                    events += event
+                    if (event is AppStreamEvent.ExecutionStatusUpdate && event.status == TOOL_CALL_WRITING_STATUS) {
+                        writing.complete(Unit)
+                    }
+                }
+            }
+            try {
+                channel.writeStringUtf8("data: $start\n\n")
+                withTimeout(5_000) { writing.await() }
+                assertTrue("$protocol 还应等待剩余参数", job.isActive)
+                assertTrue("$protocol 不得提前发布完整调用", events.none { it is AppStreamEvent.ToolCall })
+
+                endings.getValue(protocol).forEach { channel.writeStringUtf8("data: $it\n\n") }
+                channel.close()
+                withTimeout(5_000) { job.join() }
+                assertEquals(protocol, 1, events.count {
+                    it is AppStreamEvent.ExecutionStatusUpdate && it.status == TOOL_CALL_WRITING_STATUS
+                })
+                assertEquals(protocol, "pwd", events.filterIsInstance<AppStreamEvent.ToolCall>()
+                    .single().argumentsObj["command"]?.jsonPrimitive?.content)
+                assertTrue(protocol, events.none { it is AppStreamEvent.Error })
+            } finally {
+                channel.close()
+                job.cancelAndJoin()
+                client.close()
+            }
+        }
+    }
+
+    @Test
     fun `http errors emit one error terminal without stop`() = runBlocking {
         withHttpClient(
             status = 500,
@@ -123,7 +191,7 @@ class DirectClientLifecycleTest {
     }
 
     @Test
-    fun `Gemini流解析保留空思考块和工具调用签名`() = runBlocking {
+    fun `Gemini流解析丢弃空思考块并保留工具调用签名`() = runBlocking {
         val body =
             """data: {"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"","thoughtSignature":"cmVhc29uaW5nLXNpZw=="},{"functionCall":{"id":"call-1","name":"exec","args":{}},"thoughtSignature":"dG9vbC1zaWc="}]},"finishReason":"STOP"}]}
 
@@ -131,13 +199,12 @@ class DirectClientLifecycleTest {
         withHttpClient(body = body) { client ->
             val events = GeminiDirectClient.streamChatDirect(client, request("Google", "Gemini")).toList()
 
-            val reasoning = events.filterIsInstance<AppStreamEvent.Reasoning>().single()
             val toolCall = events.filterIsInstance<AppStreamEvent.ToolCall>().single()
             val continuation = events.filterIsInstance<AppStreamEvent.ProviderContinuation>().single()
-            assertEquals("", reasoning.text)
-            assertEquals("cmVhc29uaW5nLXNpZw==", reasoning.thoughtSignature)
+            assertTrue(events.filterIsInstance<AppStreamEvent.Reasoning>().isEmpty())
             assertEquals("dG9vbC1zaWc=", toolCall.thoughtSignature)
-            assertTrue(continuation.payloadJson.contains("thoughtSignature"))
+            assertFalse(continuation.payloadJson.contains("cmVhc29uaW5nLXNpZw=="))
+            assertTrue(continuation.payloadJson.contains("dG9vbC1zaWc="))
             assertEquals("tool_use", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
         }
     }
@@ -164,6 +231,27 @@ class DirectClientLifecycleTest {
             assertEquals("dGhpbmstc2ln", parts[0].getValue("thoughtSignature").jsonPrimitive.content)
             assertEquals("结果已生成", parts[1].getValue("text").jsonPrimitive.content)
             assertEquals("dGV4dC1zaWc=", parts[1].getValue("thoughtSignature").jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `Gemini流中的签名单独碎片不会进入下一轮Continuation`() = runBlocking {
+        val body = buildString {
+            append("data: ")
+            append("""{"candidates":[{"content":{"role":"model","parts":[{"thoughtSignature":"c2ln"}]}}]}""")
+            append("\n\ndata: ")
+            append("""{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"exec","args":{}}}]} ,"finishReason":"STOP"}]}""")
+            append("\n\n")
+        }
+        withHttpClient(body = body) { client ->
+            val continuation = GeminiDirectClient.streamChatDirect(client, request("Google", "Gemini"))
+                .toList().filterIsInstance<AppStreamEvent.ProviderContinuation>().single()
+            val parts = Json.parseToJsonElement(continuation.payloadJson).jsonObject
+                .getValue("parts").jsonArray.map { it.jsonObject }
+
+            assertEquals(1, parts.size)
+            assertTrue(parts.single().containsKey("functionCall"))
+            assertTrue(parts.none { it.keys == setOf("thoughtSignature") })
         }
     }
 
@@ -642,7 +730,8 @@ class DirectClientLifecycleTest {
             assertEquals(2, usageEvents.size)
             assertFalse(usageEvents.first().usage.isFinal)
             val usage = usageEvents.last().usage
-            assertEquals(400L, usage.inputTokens)
+            assertEquals(480L, usage.inputTokens)
+            assertEquals(480L, usageEvents.first().usage.inputTokens)
             assertEquals(50L, usage.outputTokens)
             assertEquals(60L, usage.cachedInputTokens)
             assertEquals(20L, usage.cacheWriteTokens)

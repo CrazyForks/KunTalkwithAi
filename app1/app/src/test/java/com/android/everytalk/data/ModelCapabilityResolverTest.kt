@@ -8,13 +8,37 @@ import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.ResolvedModelCapability
 import com.android.everytalk.data.DataClass.resolveModelCapability
-import com.android.everytalk.data.DataClass.officialModelCapability
+import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
+import kotlinx.serialization.json.Json
 import com.android.everytalk.data.DataClass.familyModelCapability
 import com.android.everytalk.data.DataClass.withUserTokenLimits
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ModelCapabilityResolverTest {
+
+    @Test
+    fun `pi高于社区与旧缓存但保留实时和手动值优先级`() {
+        val priority = listOf(
+            ModelCapabilitySource.USER_OVERRIDE, ModelCapabilitySource.LIVE_ENDPOINT,
+            ModelCapabilitySource.PI_CATALOG,
+            ModelCapabilitySource.LOCAL_CACHE, ModelCapabilitySource.COMMUNITY_CATALOG,
+            ModelCapabilitySource.FAMILY_FALLBACK, ModelCapabilitySource.CONSERVATIVE_DEFAULT,
+        )
+        val candidates = priority.mapIndexed { index, source ->
+            ModelCapabilityCandidate(
+                modelId = "model-a", protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                contextWindowTokens = 100_000 + index, maxOutputTokens = 8_000 + index, source = source,
+            )
+        }
+        priority.indices.forEach { index ->
+            val resolved = resolveModelCapability("model-a", ModelParameterProtocol.OPENAI_COMPATIBLE,
+                "https://any-proxy.example", candidates.drop(index).reversed())
+            assertEquals(priority[index], resolved.contextWindowSource)
+            assertEquals(priority[index], resolved.maxOutputSource)
+            assertEquals(100_000 + index, resolved.contextWindowTokens)
+        }
+    }
 
     @Test
     fun `同名模型在不同端点的能力互不污染`() {
@@ -218,35 +242,30 @@ class ModelCapabilityResolverTest {
     }
 
     @Test
-    fun `GPT 56 官方目录提供当前 token 限制与模态`() {
-        val capability = officialModelCapability(
-            modelId = "gpt-5.6",
-            protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
-        )
-
-        requireNotNull(capability)
-        assertEquals(1_050_000, capability.contextWindowTokens)
-        assertEquals(128_000, capability.maxOutputTokens)
-        assertEquals(922_000, capability.maxInputTokens)
-        assertEquals(setOf("none", "low", "medium", "high", "xhigh", "max"), capability.reasoningEfforts)
-        assertEquals(setOf("text", "image"), capability.inputModalities)
-        assertEquals(setOf("text"), capability.outputModalities)
-        assertEquals(ModelCapabilitySource.OFFICIAL_CATALOG, capability.source)
+    fun `GPT56实际配置采用pi限制而不被内置值覆盖`() {
+        for (model in listOf("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")) {
+            val config = ApiConfig(address = "https://proxy.example", key = "key", model = model, provider = "proxy", name = model)
+            val pi = ModelCapabilityCandidate(modelId = model, protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                contextWindowTokens = 272_000, maxOutputTokens = 128_000, source = ModelCapabilitySource.PI_CATALOG)
+            val community = pi.copy(contextWindowTokens = 1_050_000, source = ModelCapabilitySource.COMMUNITY_CATALOG)
+            val result = config.withModelCapabilityDefaults(listOf(community, pi))
+            assertEquals(272_000, result.modelParameters.maxContextTokens)
+            assertEquals(128_000, result.maxTokens)
+            assertEquals(ModelCapabilitySource.PI_CATALOG, result.modelParameters.resolvedCapability?.contextWindowSource)
+            val fallback = config.withModelCapabilityDefaults(listOf(community.copy(contextWindowTokens = 200_000)))
+            assertEquals(200_000, fallback.modelParameters.maxContextTokens)
+            assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, fallback.modelParameters.resolvedCapability?.contextWindowSource)
+        }
     }
 
     @Test
-    fun `Claude Opus 48官方目录提供当前token限制与模态`() {
-        val capability = officialModelCapability(
-            modelId = "claude-opus-4-8",
-            protocol = ModelParameterProtocol.ANTHROPIC,
-        )
-
-        requireNotNull(capability)
-        assertEquals(1_000_000, capability.contextWindowTokens)
-        assertEquals(128_000, capability.maxOutputTokens)
-        assertEquals(setOf("text", "image"), capability.inputModalities)
-        assertEquals(setOf("text"), capability.outputModalities)
-        assertEquals(ModelCapabilitySource.OFFICIAL_CATALOG, capability.source)
+    fun `旧来源标记可以反序列化但不再作为参数来源`() {
+        val legacy = Json.decodeFromString<ModelCapabilityCandidate>("""{"modelId":"model-a","protocol":"OPENAI_COMPATIBLE","contextWindowTokens":1050000,"maxOutputTokens":128000,"source":"OFFICIAL_CATALOG"}""")
+        val community = legacy.copy(contextWindowTokens = 200_000, source = ModelCapabilitySource.COMMUNITY_CATALOG)
+        val result = resolveModelCapability("model-a", ModelParameterProtocol.OPENAI_COMPATIBLE, "https://proxy.example",
+            listOf(legacy, legacy.copy(source = ModelCapabilitySource.LOCAL_CACHE, cachedSource = legacy.source), community))
+        assertEquals(200_000, result.contextWindowTokens)
+        assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, result.contextWindowSource)
     }
 
     @Test

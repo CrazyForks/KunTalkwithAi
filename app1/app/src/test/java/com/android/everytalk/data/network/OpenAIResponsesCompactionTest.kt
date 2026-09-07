@@ -102,10 +102,18 @@ class OpenAIResponsesCompactionTest {
         }
 
         client.use {
-            val events = OpenAIResponsesClient.streamChatResponses(
+            val restored = restoredState().copy(model = "gpt-5.6-fallback")
+            val fallbackRequest = request(restoredState = restored).copy(model = restored.model)
+            val firstEvents = OpenAIResponsesClient.streamChatResponses(
                 it,
-                request(restoredState = restoredState()),
+                fallbackRequest,
             ).toList()
+            assertEquals(1, requestCount.get())
+            assertTrue(firstEvents.filterIsInstance<AppStreamEvent.Error>().any {
+                it.code == "native_context_unsupported" && it.type == "retryable_network"
+            })
+
+            val events = OpenAIResponsesClient.streamChatResponses(it, fallbackRequest).toList()
             val reset = events.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single()
 
             assertTrue(payloads[0].contains("context_management"))
