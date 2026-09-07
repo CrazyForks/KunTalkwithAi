@@ -37,7 +37,6 @@ import com.android.everytalk.ui.screens.MainScreen.shouldHideHistoryLoadingSkele
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
-import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -192,24 +191,16 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
     // 关于对话框 - 修复图像模式下的显示bug
     val showAboutDialog by viewModel.showAboutDialog.collectAsState()
-    val showEditDialog by viewModel.showEditDialog.collectAsState()
-    val editDialogInputText by viewModel.editDialogInputText.collectAsState()
+    val restoredDraft by viewModel.restoredMessageDraft.collectAsState()
+    val isRestoringMessage by viewModel.isRestoringMessage.collectAsState()
+    val messageEditSession by viewModel.messageEditSession.collectAsState()
 
-    // 标记是否刚关闭编辑对话框，用于防止输入框重新获焦时自动滚动到底部
-    var justClosedEditDialog by remember { mutableStateOf(false) }
     
     LaunchedEffect(Unit) {
         // 强制同步模式状态为 IMAGE
         viewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE)
     }
 
-    LaunchedEffect(showEditDialog) {
-        if (!showEditDialog) {
-            justClosedEditDialog = true
-            kotlinx.coroutines.delay(500)
-            justClosedEditDialog = false
-        }
-    }
 
     // 监听滚动到指定消息的事件（重新回答时置顶）
     LaunchedEffect(scrollStateManager) {
@@ -336,14 +327,6 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         )
     }
     
-    if (showEditDialog) {
-        EditMessageDialog(
-            editDialogInputText = editDialogInputText,
-            onDismissRequest = { viewModel.dismissEditDialog() },
-            onEditDialogTextChanged = viewModel::onEditDialogTextChanged,
-            onConfirmMessageEdit = { viewModel.confirmImageGenerationMessageEdit() }
-        )
-    }
 
 
 
@@ -418,6 +401,13 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 contentAlignment = Alignment.BottomCenter
             ) {
                 ImageGenerationInputArea(
+                    restoredDraft = restoredDraft,
+                    isRestoringMessage = isRestoringMessage,
+                    messageEditSession = messageEditSession?.takeIf { it.belongsTo(currentImageConvId, true) },
+                    onRestoreOriginalMessages = { text, attachments ->
+                        viewModel.restoreOriginalMessages(text, attachments, isImageGeneration = true)
+                    },
+                    onRestoredDraftConsumed = viewModel::consumeRestoredMessageDraft,
                     text = text,
                     onTextChange = { viewModel.onTextChange(it) },
                     onSendMessageRequest = { messageText, attachments ->
@@ -444,9 +434,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     density = density,
                     keyboardController = keyboardController,
                     onFocusChange = {
-                        if (!justClosedEditDialog) {
-                            scrollStateManager.jumpToBottom()
-                        }
+                        scrollStateManager.jumpToBottom()
                     },
                     selectedImageRatio = selectedImageRatio,
                     onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it },

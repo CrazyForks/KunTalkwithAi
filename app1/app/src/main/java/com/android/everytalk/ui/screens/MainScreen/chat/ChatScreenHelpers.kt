@@ -16,12 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.IosShare
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.CompositionLocalProvider
@@ -73,7 +67,6 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.components.image.buildImagePreviewSelection
-import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.EmptyChatView
 import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBottomSheet

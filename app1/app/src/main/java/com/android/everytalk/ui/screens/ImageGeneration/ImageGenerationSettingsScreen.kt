@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.ImageGeneration
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import android.util.Log
@@ -9,9 +11,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -221,7 +220,7 @@ fun ImageGenerationSettingsScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            painterResource(R.drawable.ic_arrow_back),
                             contentDescription = stringResource(R.string.navigation_back),
                             tint = contentColor,
                             modifier = Modifier.size(20.dp)
@@ -246,7 +245,7 @@ fun ImageGenerationSettingsScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Filled.Add,
+                            painterResource(R.drawable.ic_plus),
                             contentDescription = stringResource(R.string.action_add),
                             tint = contentColor,
                             modifier = Modifier.size(20.dp)

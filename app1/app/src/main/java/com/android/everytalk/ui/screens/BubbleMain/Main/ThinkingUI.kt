@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
+import androidx.compose.ui.res.painterResource
+
 import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 
 import androidx.compose.animation.AnimatedVisibility
@@ -30,8 +32,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -521,7 +521,7 @@ private fun ExecutionChainHeader(
         }
         Spacer(Modifier.width(6.dp))
         Icon(
-            imageVector = Icons.Filled.KeyboardArrowDown,
+            painter = painterResource(R.drawable.ic_gpt_chevron_down_md),
             contentDescription = stringResource(
                 if (expanded) R.string.thinking_collapse_execution else R.string.thinking_expand_execution
             ),
@@ -789,7 +789,7 @@ private fun ExecutionToolGroup(
             }
             Spacer(Modifier.width(6.dp))
             Icon(
-                imageVector = Icons.Filled.KeyboardArrowDown,
+                painter = painterResource(R.drawable.ic_gpt_chevron_down_md),
                 contentDescription = stringResource(
                     if (expanded) R.string.thinking_collapse_execution else R.string.thinking_expand_execution
                 ),

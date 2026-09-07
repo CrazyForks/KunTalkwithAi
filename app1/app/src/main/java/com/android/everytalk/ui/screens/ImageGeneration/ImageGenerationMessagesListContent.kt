@@ -536,7 +536,7 @@ fun ImageGenerationMessagesList(
                                                 },
                                                 maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
                                                 message = message,
-                                                onEditRequest = { viewModel.requestEditMessage(it) },
+                                                onEditRequest = { viewModel.requestEditMessage(it, isImageGeneration = true) },
                                                 onRegenerateRequest = {
                                                     scrollStateManager.lockAutoScroll()
                                                     viewModel.regenerateAiResponse(it, isImageGeneration = true, scrollToNewMessage = true)

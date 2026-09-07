@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.appinfo
 
+import androidx.compose.ui.res.painterResource
+
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,16 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.DataObject
-import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Extension
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -40,7 +32,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -204,7 +195,7 @@ private fun StorageCategorySummary(
                 contentColor = visual.accent,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(visual.icon, contentDescription = null, modifier = Modifier.size(25.dp))
+                    Icon(painterResource(visual.icon), contentDescription = null, modifier = Modifier.size(25.dp))
                 }
             }
             Spacer(Modifier.width(14.dp))
@@ -318,7 +309,7 @@ private fun StorageEntryRow(
             } else {
                 Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = if (entry.kind == StorageEntryKind.SYSTEM_REMAINDER) Icons.Outlined.Lock else icon,
+                        painter = painterResource(if (entry.kind == StorageEntryKind.SYSTEM_REMAINDER) R.drawable.ic_gpt_lock else icon),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(21.dp),
@@ -328,7 +319,7 @@ private fun StorageEntryRow(
             Spacer(Modifier.width(4.dp))
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                    Icon(painterResource(icon), contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(7.dp))
                     Text(
                         text = entryTitle(entry),
@@ -406,14 +397,14 @@ private fun entrySubtitle(entry: StorageContentEntry): String {
     return if (time == null) typeText else "$typeText · $time"
 }
 
-private fun storageEntryIcon(kind: StorageEntryKind): ImageVector = when (kind) {
-    StorageEntryKind.CONVERSATION -> Icons.Outlined.ChatBubbleOutline
-    StorageEntryKind.DATABASE_FILE -> Icons.Outlined.DataObject
-    StorageEntryKind.ATTACHMENT_FILE -> Icons.Outlined.Image
-    StorageEntryKind.SKILL -> Icons.Outlined.Extension
-    StorageEntryKind.TOOL_ARCHIVE -> Icons.Outlined.Terminal
-    StorageEntryKind.TEMPORARY_FILE -> Icons.Outlined.DeleteOutline
-    StorageEntryKind.OTHER_FILE, StorageEntryKind.SYSTEM_REMAINDER -> Icons.Outlined.Folder
+private fun storageEntryIcon(kind: StorageEntryKind): Int = when (kind) {
+    StorageEntryKind.CONVERSATION -> R.drawable.ic_gpt_chat
+    StorageEntryKind.DATABASE_FILE -> R.drawable.ic_gpt_data_controls
+    StorageEntryKind.ATTACHMENT_FILE -> R.drawable.ic_gpt_file_image
+    StorageEntryKind.SKILL -> R.drawable.ic_gpt_block_stack_skills
+    StorageEntryKind.TOOL_ARCHIVE -> R.drawable.ic_gpt_terminal
+    StorageEntryKind.TEMPORARY_FILE -> R.drawable.ic_trash
+    StorageEntryKind.OTHER_FILE, StorageEntryKind.SYSTEM_REMAINDER -> R.drawable.ic_folder
 }
 
 @Composable
@@ -443,7 +434,7 @@ private fun StorageSelectionBar(
             ),
         ) {
             Icon(
-                if (protected) Icons.AutoMirrored.Outlined.OpenInNew else Icons.Outlined.DeleteOutline,
+                painterResource(if (protected) R.drawable.ic_gpt_open_in_new else R.drawable.ic_trash),
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
             )

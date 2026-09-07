@@ -28,6 +28,20 @@ internal data class SkillEditState(
     val references: List<MessageSkillReference>,
 )
 
+/** 从已发送内容恢复输入框占位符和原始 Skill 引用，保留顺序及冻结版本。 */
+internal fun restoreSkillEditor(text: String, parts: List<MessageContentPart>): SkillEditState {
+    val editorText = if (parts.isEmpty()) text else parts.joinToString("") {
+        when (it) {
+            is MessageContentPart.Text -> it.text
+            is MessageContentPart.SkillReference -> SKILL_TAG_MARKER.toString()
+        }
+    }
+    return SkillEditState(
+        TextFieldValue(editorText, TextRange(editorText.length)),
+        parts.filterIsInstance<MessageContentPart.SkillReference>().map { it.reference },
+    )
+}
+
 internal fun rankSkillCandidates(
     skills: List<SkillInstallationEntity>,
     query: String,

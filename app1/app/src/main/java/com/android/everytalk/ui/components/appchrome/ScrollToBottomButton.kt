@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.components
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.AnimatedVisibility
@@ -16,8 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -129,7 +129,7 @@ fun ScrollToBottomButton(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Filled.ArrowDownward,
+                    painter = painterResource(R.drawable.ic_gpt_arrow_down),
                     contentDescription = stringResource(R.string.chat_scroll_to_bottom),
                     tint = contentColor,
                     modifier = Modifier.size(20.dp)

@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.models
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.clickable
@@ -10,9 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -41,10 +40,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Loop
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
@@ -300,7 +295,7 @@ fun ModelSelectionBottomSheet(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Search,
+                                painter = painterResource(R.drawable.ic_search),
                                 contentDescription = stringResource(R.string.chat_model_search),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(20.dp)
@@ -334,7 +329,7 @@ fun ModelSelectionBottomSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Loop,
+                        painter = painterResource(R.drawable.ic_regenerate),
                         contentDescription = stringResource(R.string.chat_model_switch_platform),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
@@ -353,7 +348,7 @@ fun ModelSelectionBottomSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Lock,
+                    painter = painterResource(R.drawable.ic_gpt_lock),
                     contentDescription = stringResource(R.string.chat_model_key_icon),
                     tint = Color(0xff7bc047),
                     modifier = Modifier.size(24.dp)
@@ -415,7 +410,7 @@ fun ModelSelectionBottomSheet(
                                 trailingContent = {
                                     if (modelConfig.id == selectedApiConfig?.id) {
                                         Icon(
-                                            Icons.Filled.Done,
+                                            painterResource(R.drawable.ic_check),
                                             contentDescription = stringResource(R.string.chat_model_currently_selected),
                                             tint = Color(0xff778899),
                                             modifier = Modifier.size(20.dp) // 较小的勾选图标
@@ -516,13 +511,13 @@ fun PlatformSelectionDialog(
                             trailingContent = {
                                 if (tempSelectedPlatform == platform) {
                                     Icon(
-                                        imageVector = Icons.Filled.CheckCircle,
+                                        painter = painterResource(R.drawable.ic_check_circle),
                                         contentDescription = stringResource(R.string.state_selected),
                                         tint = MaterialTheme.colorScheme.primary
                                     )
                                 } else {
                                     Icon(
-                                        imageVector = Icons.Filled.RadioButtonUnchecked,
+                                        painter = painterResource(R.drawable.ic_circle_empty),
                                         contentDescription = stringResource(R.string.state_unselected),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

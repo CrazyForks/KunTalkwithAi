@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.components.markdown
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.AnimatedVisibility
@@ -19,8 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -92,7 +92,7 @@ internal fun MarkdownDetailsBlock(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    painter = painterResource(R.drawable.ic_gpt_chevron_down_md),
                     contentDescription = null,
                     modifier = Modifier.graphicsLayer { rotationZ = arrowRotation },
                 )

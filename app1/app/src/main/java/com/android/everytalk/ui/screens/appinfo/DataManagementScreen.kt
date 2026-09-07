@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.screens.appinfo
 
+import androidx.compose.ui.res.painterResource
+import androidx.annotation.DrawableRes
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -20,16 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.ChevronRight
-import androidx.compose.material.icons.outlined.CleaningServices
-import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.Extension
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.PhotoLibrary
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -54,7 +47,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -164,7 +156,7 @@ fun DataManagementScreen(
     if (showJunkConfirmation && currentSnapshot != null) {
         AlertDialog(
             onDismissRequest = { showJunkConfirmation = false },
-            icon = { Icon(Icons.Outlined.CleaningServices, contentDescription = null) },
+            icon = { Icon(painterResource(R.drawable.ic_gpt_broom), contentDescription = null) },
             title = { Text(stringResource(R.string.storage_clear_dialog_title)) },
             text = {
                 Text(
@@ -210,7 +202,7 @@ fun DataManagementScreen(
         val visual = detailVisual(type, palette)
         AlertDialog(
             onDismissRequest = { pendingDeleteEntries = emptyList() },
-            icon = { Icon(visual.icon, contentDescription = null) },
+            icon = { Icon(painterResource(visual.icon), contentDescription = null) },
             title = {
                 Text(stringResource(R.string.storage_selected_delete_title, pendingEntries.size))
             },
@@ -467,7 +459,7 @@ private fun CleanerCard(
                     contentColor = palette.safe,
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Outlined.CleaningServices, contentDescription = null)
+                        Icon(painterResource(R.drawable.ic_gpt_broom), contentDescription = null)
                     }
                 }
                 Spacer(Modifier.width(13.dp))
@@ -504,7 +496,7 @@ private fun CleanerCard(
                         color = Color.White,
                     )
                 } else {
-                    Icon(Icons.Outlined.DeleteSweep, contentDescription = null, modifier = Modifier.size(19.dp))
+                    Icon(painterResource(R.drawable.ic_trash), contentDescription = null, modifier = Modifier.size(19.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = if (cleanableBytes > 0L) {
@@ -587,7 +579,7 @@ private fun StorageDetailRow(
                 contentColor = visual.accent,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(visual.icon, contentDescription = null, modifier = Modifier.size(21.dp))
+                    Icon(painterResource(visual.icon), contentDescription = null, modifier = Modifier.size(21.dp))
                 }
             }
             Spacer(Modifier.width(14.dp))
@@ -606,7 +598,7 @@ private fun StorageDetailRow(
                     )
                     Spacer(Modifier.width(5.dp))
                     Icon(
-                        Icons.Outlined.ChevronRight,
+                        painterResource(R.drawable.ic_gpt_chevron_right),
                         contentDescription = stringResource(R.string.storage_open_category),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(19.dp),
@@ -658,7 +650,7 @@ private fun StorageErrorState(onRetry: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
         )
         OutlinedButton(onClick = onRetry) {
-            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(painterResource(R.drawable.ic_regenerate), contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.action_retry))
         }
@@ -708,7 +700,7 @@ private fun storagePalette(): StoragePalette {
 }
 
 internal data class DetailVisual(
-    val icon: ImageVector,
+    @DrawableRes val icon: Int,
     val titleRes: Int,
     val descriptionRes: Int,
     val accent: Color,
@@ -716,37 +708,37 @@ internal data class DetailVisual(
 
 internal fun detailVisual(type: StorageDetailType, palette: StoragePalette): DetailVisual = when (type) {
     StorageDetailType.CONVERSATIONS -> DetailVisual(
-        Icons.Outlined.ChatBubbleOutline,
+        R.drawable.ic_gpt_chat,
         R.string.storage_conversations,
         R.string.storage_conversations_description,
         palette.primary,
     )
     StorageDetailType.ATTACHMENTS -> DetailVisual(
-        Icons.Outlined.PhotoLibrary,
+        R.drawable.ic_image_gallery,
         R.string.storage_attachments,
         R.string.storage_attachments_description,
         palette.primary,
     )
     StorageDetailType.SKILLS -> DetailVisual(
-        Icons.Outlined.Extension,
+        R.drawable.ic_gpt_block_stack_skills,
         R.string.storage_skills,
         R.string.storage_skills_description,
         palette.primary,
     )
     StorageDetailType.TOOL_RESULTS -> DetailVisual(
-        Icons.Outlined.Terminal,
+        R.drawable.ic_gpt_terminal,
         R.string.storage_tool_results,
         R.string.storage_tool_results_description,
         palette.primary,
     )
     StorageDetailType.TEMPORARY_FILES -> DetailVisual(
-        Icons.Outlined.DeleteSweep,
+        R.drawable.ic_trash,
         R.string.storage_temporary,
         R.string.storage_temporary_description,
         palette.safe,
     )
     StorageDetailType.OTHER_DATA -> DetailVisual(
-        Icons.Outlined.Folder,
+        R.drawable.ic_folder,
         R.string.storage_other,
         R.string.storage_other_description,
         palette.cache,

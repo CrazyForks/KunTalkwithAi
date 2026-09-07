@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.skill
 
+import androidx.compose.ui.res.painterResource
+
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,10 +27,6 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -223,7 +221,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                     shape = AppDialogButtonShape,
                                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
                                 ) {
-                                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                                    Icon(painterResource(R.drawable.ic_gpt_edit), null, modifier = Modifier.size(18.dp))
                                     Text(" 复制并编辑", fontWeight = FontWeight.SemiBold)
                                 }
                                 if (skillPackage?.updateHash != null && remoteDetail != null) {
@@ -242,7 +240,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                     shape = AppDialogButtonShape,
                                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
                                 ) {
-                                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                                    Icon(painterResource(R.drawable.ic_gpt_edit), null, modifier = Modifier.size(18.dp))
                                     Text(" 编辑规则", fontWeight = FontWeight.SemiBold)
                                 }
                             }
@@ -261,7 +259,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                         border = BorderStroke(1.dp, dialogBorder),
                                         contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
                                     ) {
-                                        Icon(Icons.Default.Add, null, modifier = Modifier.size(14.dp))
+                                        Icon(painterResource(R.drawable.ic_plus), null, modifier = Modifier.size(14.dp))
                                         Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                     }
                                 }
@@ -283,7 +281,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                     Text("${file.size} B · ${file.sha256.take(10)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
                                 }
                                 if (installation.sourceType != SkillSourceType.REMOTE.name && file.path != "SKILL.md") {
-                                    IconButton(onClick = { pendingDelete = file.path }) { Icon(Icons.Default.Delete, "删除文件", tint = MaterialTheme.colorScheme.error) }
+                                    IconButton(onClick = { pendingDelete = file.path }) { Icon(painterResource(R.drawable.ic_trash), "删除文件", tint = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         }
@@ -293,7 +291,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                         items(savedSecrets, key = SkillSecretMetadata::name) { secret ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(secret.name, Modifier.weight(1f))
-                                IconButton(onClick = { pendingSecretDelete = secret.name }) { Icon(Icons.Default.Delete, "删除密钥", tint = MaterialTheme.colorScheme.error) }
+                                IconButton(onClick = { pendingSecretDelete = secret.name }) { Icon(painterResource(R.drawable.ic_trash), "删除密钥", tint = MaterialTheme.colorScheme.error) }
                             }
                         }
                     }

@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
+import androidx.compose.ui.res.painterResource
+import androidx.annotation.DrawableRes
+
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -19,13 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -41,7 +37,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -422,7 +417,7 @@ internal fun ThinkingExecutionTimeline(
                 is OrderedExecutionItem.Reasoning -> {
                     val currentReasoningIndex = reasoningNodeIndex++
                     TimelineNode(
-                        icon = Icons.Outlined.AutoAwesome,
+                        icon = R.drawable.ic_gpt_sparkle,
                         iconTint = TimelineReasoningPurple,
                         title = stringResource(R.string.thinking_process),
                         active = itemIndex == activeReasoningItemIndex,
@@ -462,7 +457,7 @@ internal fun ThinkingExecutionTimeline(
 
         if (showStandaloneActivity) {
             TimelineNode(
-                icon = Icons.Outlined.AutoAwesome,
+                icon = R.drawable.ic_gpt_sparkle,
                 iconTint = TimelineReasoningPurple,
                 title = localizedActivityStatusText
                     ?: stringResource(R.string.thinking_waiting_first_response),
@@ -477,7 +472,7 @@ internal fun ThinkingExecutionTimeline(
 
         if (webSearchResults.isNotEmpty() && sourceItemIndex < 0) {
             TimelineNode(
-                icon = Icons.Filled.Public,
+                icon = R.drawable.ic_globe,
                 iconTint = TimelineWebGreen,
                 title = stringResource(R.string.thinking_browsed_websites),
                 active = false,
@@ -493,7 +488,7 @@ internal fun ThinkingExecutionTimeline(
 
         if (!isReasoningActive) {
             TimelineNode(
-                icon = Icons.Filled.CheckCircle,
+                icon = R.drawable.ic_check_circle,
                 iconTint = if (messageIsError) {
                     TimelineErrorRed
                 } else {
@@ -518,7 +513,7 @@ internal fun ThinkingExecutionTimeline(
 
 @Composable
 private fun TimelineNode(
-    icon: ImageVector,
+    @DrawableRes icon: Int,
     iconTint: Color,
     title: String,
     active: Boolean,
@@ -594,7 +589,7 @@ private fun TimelineNode(
 
 @Composable
 private fun TimelineNodeIcon(
-    icon: ImageVector,
+    @DrawableRes icon: Int,
     tint: Color,
     active: Boolean,
     completed: Boolean,
@@ -608,7 +603,7 @@ private fun TimelineNodeIcon(
         ActiveTimelineNodeIcon(icon = icon, tint = resolvedTint)
     } else {
         Icon(
-            imageVector = icon,
+            painter = painterResource(icon),
             contentDescription = null,
             tint = resolvedTint,
             modifier = Modifier
@@ -620,7 +615,7 @@ private fun TimelineNodeIcon(
 
 @Composable
 private fun ActiveTimelineNodeIcon(
-    icon: ImageVector,
+    @DrawableRes icon: Int,
     tint: Color,
 ) {
     val transition = rememberInfiniteTransition(label = "执行步骤图标动画")
@@ -637,7 +632,7 @@ private fun ActiveTimelineNodeIcon(
         label = "执行步骤图标缩放",
     )
     Icon(
-        imageVector = icon,
+        painter = painterResource(icon),
         contentDescription = null,
         tint = tint,
         modifier = Modifier
@@ -650,11 +645,11 @@ private fun ActiveTimelineNodeIcon(
     )
 }
 
-internal fun stepIcon(type: ExecutionStepType): ImageVector = when (type) {
-    ExecutionStepType.Search -> Icons.Filled.Search
-    ExecutionStepType.Web -> Icons.Filled.Public
-    ExecutionStepType.Tool -> Icons.Filled.Build
-    ExecutionStepType.Agent -> Icons.Filled.Terminal
+internal fun stepIcon(type: ExecutionStepType): Int = when (type) {
+    ExecutionStepType.Search -> R.drawable.ic_search
+    ExecutionStepType.Web -> R.drawable.ic_globe
+    ExecutionStepType.Tool -> R.drawable.ic_gpt_wrench
+    ExecutionStepType.Agent -> R.drawable.ic_gpt_terminal
 }
 
 internal fun stepIconTint(type: ExecutionStepType): Color = when (type) {
@@ -680,10 +675,10 @@ private fun ExecutionLabels(
             CapsuleLabel(
                 text = if (step.type == ExecutionStepType.Web) linkHost(label).ifBlank { label } else label,
                 icon = when (step.type) {
-                    ExecutionStepType.Search -> Icons.Filled.Search
-                    ExecutionStepType.Web -> Icons.Filled.Public
-                    ExecutionStepType.Tool -> Icons.Filled.Build
-                    ExecutionStepType.Agent -> Icons.Filled.Terminal
+                    ExecutionStepType.Search -> R.drawable.ic_search
+                    ExecutionStepType.Web -> R.drawable.ic_globe
+                    ExecutionStepType.Tool -> R.drawable.ic_gpt_wrench
+                    ExecutionStepType.Agent -> R.drawable.ic_gpt_terminal
                 },
                 iconTint = stepIconTint(step.type),
                 onClick = if (step.type == ExecutionStepType.Web) {
@@ -737,7 +732,7 @@ private fun WebsiteLabels(results: List<WebSearchResult>) {
 private fun CapsuleLabel(
     text: String,
     modifier: Modifier = Modifier,
-    icon: ImageVector? = null,
+    @DrawableRes icon: Int? = null,
     iconTint: Color? = null,
     onClick: (() -> Unit)? = null,
     trailingText: String? = null,
@@ -754,7 +749,7 @@ private fun CapsuleLabel(
         ) {
             if (icon != null) {
                 Icon(
-                    imageVector = icon,
+                    painter = painterResource(icon),
                     contentDescription = null,
                     tint = iconTint ?: LocalContentColor.current,
                     modifier = Modifier.size(16.dp),
@@ -846,7 +841,7 @@ private fun WebsiteCapsule(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Public,
+                    painter = painterResource(R.drawable.ic_globe),
                     contentDescription = null,
                     tint = TimelineWebGreen,
                     modifier = Modifier.size(14.dp),

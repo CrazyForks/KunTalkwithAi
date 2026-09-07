@@ -1,11 +1,11 @@
 package com.android.everytalk.ui.components
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,7 +47,7 @@ fun ImageRatioButton(
         ) {
             // 比例图标
             Icon(
-                imageVector = Icons.Default.AspectRatio,
+                painter = painterResource(R.drawable.ic_aspect_ratio),
                 contentDescription = stringResource(R.string.image_select_ratio_content_description),
                 modifier = Modifier.size(16.dp),
                 tint = Color(0xFF00BCD4) // 青绿色

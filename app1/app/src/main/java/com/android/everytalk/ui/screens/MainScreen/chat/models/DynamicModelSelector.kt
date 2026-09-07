@@ -1,13 +1,12 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.models
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -182,7 +181,7 @@ fun DynamicModelSelector(
                         modifier = Modifier.size(56.dp)
                     ) {
                         Icon(
-                            imageVector = androidx.compose.material.icons.Icons.Default.Add,
+                            painter = painterResource(R.drawable.ic_plus),
                             contentDescription = stringResource(R.string.voice_model_add),
                             tint = if (isDark) Color.White else Color.Black
                         )
@@ -229,7 +228,7 @@ fun DynamicModelSelector(
                                         modifier = Modifier.size(24.dp)
                                     ) {
                                         Icon(
-                                            imageVector = androidx.compose.material.icons.Icons.Default.Close,
+                                            painter = painterResource(R.drawable.ic_close),
                                             contentDescription = stringResource(R.string.action_delete),
                                             tint = MaterialTheme.colorScheme.error,
                                             modifier = Modifier.size(16.dp)

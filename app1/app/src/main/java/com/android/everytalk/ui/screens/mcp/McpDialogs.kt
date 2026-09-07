@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.mcp
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.animateColorAsState
@@ -18,11 +20,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.automirrored.outlined.Label
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -123,7 +120,7 @@ fun McpServerListContent(
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                Icons.Outlined.Dns,
+                                painterResource(R.drawable.ic_gpt_connectors),
                                 contentDescription = null,
                                 modifier = Modifier.size(40.dp),
                                 tint = MaterialTheme.colorScheme.secondary
@@ -232,26 +229,26 @@ fun McpServerListDialog(
 }
 
 @Composable
-private fun getServerIcon(name: String): androidx.compose.ui.graphics.vector.ImageVector {
+private fun getServerIcon(name: String): Int {
     val lowerName = name.lowercase()
     return when {
-        lowerName.contains("context7") -> Icons.Filled.AutoAwesome
-        lowerName.contains("exa") -> Icons.Filled.Search
-        lowerName.contains("firecrawl") || lowerName.contains("crawl") -> Icons.Filled.Language
-        lowerName.contains("wiki") -> Icons.AutoMirrored.Filled.MenuBook
-        lowerName.contains("news") -> Icons.Filled.Newspaper
-        lowerName.contains("tavily") -> Icons.Filled.TravelExplore
-        lowerName.contains("search") -> Icons.Filled.Search
-        lowerName.contains("web") -> Icons.Filled.Public
-        lowerName.contains("code") || lowerName.contains("github") -> Icons.Filled.Code
-        lowerName.contains("data") || lowerName.contains("database") -> Icons.Filled.Storage
-        lowerName.contains("ai") || lowerName.contains("chat") -> Icons.Filled.AutoAwesome
-        lowerName.contains("file") || lowerName.contains("doc") -> Icons.Filled.Description
-        lowerName.contains("mail") || lowerName.contains("email") -> Icons.Filled.Email
-        lowerName.contains("calendar") || lowerName.contains("schedule") -> Icons.Filled.CalendarMonth
-        lowerName.contains("weather") -> Icons.Filled.Cloud
-        lowerName.contains("map") || lowerName.contains("location") -> Icons.Filled.Place
-        else -> Icons.Filled.Extension
+        lowerName.contains("context7") -> R.drawable.ic_gpt_sparkle
+        lowerName.contains("exa") -> R.drawable.ic_search
+        lowerName.contains("firecrawl") || lowerName.contains("crawl") -> R.drawable.ic_globe
+        lowerName.contains("wiki") -> R.drawable.ic_gpt_book_open_study
+        lowerName.contains("news") -> R.drawable.ic_gpt_newspaper
+        lowerName.contains("tavily") -> R.drawable.ic_gpt_deep_research
+        lowerName.contains("search") -> R.drawable.ic_search
+        lowerName.contains("web") -> R.drawable.ic_globe
+        lowerName.contains("code") || lowerName.contains("github") -> R.drawable.ic_gpt_code
+        lowerName.contains("data") || lowerName.contains("database") -> R.drawable.ic_gpt_data_controls
+        lowerName.contains("ai") || lowerName.contains("chat") -> R.drawable.ic_gpt_sparkle
+        lowerName.contains("file") || lowerName.contains("doc") -> R.drawable.ic_gpt_file_document
+        lowerName.contains("mail") || lowerName.contains("email") -> R.drawable.ic_gpt_email
+        lowerName.contains("calendar") || lowerName.contains("schedule") -> R.drawable.ic_gpt_calendar
+        lowerName.contains("weather") -> R.drawable.ic_gpt_weather_cloud
+        lowerName.contains("map") || lowerName.contains("location") -> R.drawable.ic_gpt_map_pin
+        else -> R.drawable.ic_gpt_puzzle_piece
     }
 }
 
@@ -320,7 +317,7 @@ private fun McpServerItem(
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = icon,
+                            painter = painterResource(icon),
                             contentDescription = null,
                             modifier = Modifier.size(24.dp),
                             tint = if (config.enabled) iconColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
@@ -434,7 +431,7 @@ private fun McpServerItem(
                         modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
-                            Icons.Outlined.Delete,
+                            painterResource(R.drawable.ic_trash),
                             contentDescription = stringResource(R.string.action_delete),
                             modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -765,7 +762,7 @@ fun AddMcpServerDialog(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Icon(
-                                                imageVector = getServerIcon(preset.name),
+                                                painter = painterResource(getServerIcon(preset.name)),
                                                 contentDescription = null,
                                                 tint = mcpContentColor.copy(alpha = if (isSelected) 1f else 0.62f),
                                                 modifier = Modifier.size(15.dp)
@@ -805,7 +802,7 @@ fun AddMcpServerDialog(
                         shape = textFieldShape,
                         colors = DialogTextFieldColors,
                         leadingIcon = {
-                             Icon(Icons.AutoMirrored.Outlined.Label, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                             Icon(painterResource(R.drawable.ic_gpt_product_tag), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     )
 
@@ -823,7 +820,7 @@ fun AddMcpServerDialog(
                                 !url.startsWith("http://") &&
                                 !url.startsWith("https://"),
                             leadingIcon = {
-                                Icon(Icons.Outlined.Link, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(painterResource(R.drawable.ic_link), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             },
                             supportingText = if (url.isNotBlank() &&
                                 !url.startsWith("http://") &&
@@ -902,12 +899,12 @@ fun AddMcpServerDialog(
                             shape = textFieldShape,
                             colors = DialogTextFieldColors,
                             leadingIcon = {
-                                Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(painterResource(R.drawable.ic_gpt_key), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             },
                             trailingIcon = {
                                 IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
                                     Icon(
-                                        imageVector = if (apiKeyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                        painter = painterResource(if (apiKeyVisible) R.drawable.ic_eye_off else R.drawable.ic_eye),
                                         contentDescription = stringResource(
                                             if (apiKeyVisible) R.string.mcp_hide_api_key else R.string.mcp_show_api_key,
                                         ),

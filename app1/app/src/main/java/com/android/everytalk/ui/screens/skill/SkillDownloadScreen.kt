@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.skill
 
+import androidx.compose.ui.res.painterResource
+
 import com.android.everytalk.util.AppToast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -38,10 +40,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -598,7 +596,7 @@ private fun RemoteSkillCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             }
-            if (installed) Icon(Icons.Default.CheckCircle, "已安装", tint = if (isDark) Color.White else Color.Black)
+            if (installed) Icon(painterResource(R.drawable.ic_check_circle), "已安装", tint = if (isDark) Color.White else Color.Black)
         }
     }
 }

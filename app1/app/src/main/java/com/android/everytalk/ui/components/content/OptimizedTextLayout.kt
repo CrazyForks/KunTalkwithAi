@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.components.content
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import android.content.ClipData
@@ -13,9 +15,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -195,7 +194,7 @@ fun CodeBlock(
                         modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Visibility,
+                            painter = painterResource(R.drawable.ic_eye),
                             contentDescription = previewDescription,
                             tint = topBarColor,
                             modifier = Modifier.size(16.dp)
@@ -213,7 +212,7 @@ fun CodeBlock(
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.ContentCopy,
+                        painter = painterResource(R.drawable.ic_copy),
                         contentDescription = copyCodeDescription,
                         tint = topBarColor,
                         modifier = Modifier.size(16.dp)

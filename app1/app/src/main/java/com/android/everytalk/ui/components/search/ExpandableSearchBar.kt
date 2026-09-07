@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.components.search
 
+import androidx.compose.ui.res.painterResource
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -19,9 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -152,7 +151,7 @@ fun ExpandableSearchBar(
                             .size(28.dp),
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.Close,
+                            painter = painterResource(R.drawable.ic_close),
                             contentDescription = stringResource(R.string.settings_search_clear),
                             tint = iconMutedColor,
                             modifier = Modifier.size(16.dp),
@@ -174,7 +173,7 @@ fun ExpandableSearchBar(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = if (isExpanded) Icons.Rounded.Close else Icons.Rounded.Search,
+                painter = painterResource(if (isExpanded) R.drawable.ic_close else R.drawable.ic_search),
                 contentDescription = if (isExpanded) stringResource(R.string.settings_search_clear) else stringResource(R.string.settings_search_hint),
                 tint = buttonContent,
                 modifier = Modifier.size(20.dp),

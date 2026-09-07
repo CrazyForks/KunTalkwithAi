@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.dialog
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.animateColorAsState
@@ -11,8 +13,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -313,7 +313,7 @@ fun VoiceSelectionDialog(
                                 
                                 if (isSelected) {
                                     Icon(
-                                        imageVector = androidx.compose.material.icons.Icons.Default.Check,
+                                        painter = painterResource(R.drawable.ic_check),
                                         contentDescription = stringResource(R.string.voice_selected),
                                         tint = if (isDark) Color.White else Color.Black,
                                         modifier = Modifier.size(24.dp)

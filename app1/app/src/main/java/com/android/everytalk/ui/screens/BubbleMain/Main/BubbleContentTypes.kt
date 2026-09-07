@@ -1,4 +1,7 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
+
+import androidx.compose.ui.res.painterResource
+import androidx.annotation.DrawableRes
 import com.android.everytalk.statecontroller.*
 
 import android.content.Intent
@@ -26,27 +29,11 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.animateContentSize
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
-import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.AttachFile
-import androidx.compose.material.icons.outlined.Audiotrack
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.PictureAsPdf
-import androidx.compose.material.icons.outlined.Slideshow
-import androidx.compose.material.icons.outlined.TableChart
-import androidx.compose.material.icons.outlined.Videocam
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -363,7 +350,7 @@ internal fun UserOrErrorMessageContent(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                            painter = painterResource(if (isExpanded) R.drawable.ic_gpt_chevron_up_md else R.drawable.ic_gpt_chevron_down_md),
                             contentDescription = stringResource(
                                 if (isExpanded) R.string.action_collapse else R.string.action_expand,
                             ),
@@ -710,11 +697,13 @@ fun AttachmentsContent(
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val attachmentIcon = getIconForMimeType(attachment.mimeType)
                         Icon(
-                            imageVector = getIconForMimeType(attachment.mimeType),
+                            painter = painterResource(attachmentIcon),
                             contentDescription = stringResource(R.string.attachment_generic),
                             modifier = Modifier.size(24.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            // GPT 演示文稿图标包含原始配色，避免统一染色把内部标记盖成实心块。
+                            tint = if (attachmentIcon == R.drawable.ic_gpt_file_powerpoint) Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
@@ -747,7 +736,7 @@ fun AttachmentsContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Audiotrack,
+                            painter = painterResource(R.drawable.ic_gpt_file_audio),
                             contentDescription = stringResource(R.string.attachment_audio_description),
                             modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -812,18 +801,18 @@ private fun ThreeDotsLoadingAnimation(
 }
 
 @Composable
-private fun getIconForMimeType(mimeType: String?): androidx.compose.ui.graphics.vector.ImageVector {
+private fun getIconForMimeType(mimeType: String?): Int {
     return when (mimeType) {
-        "application/pdf" -> Icons.Outlined.PictureAsPdf
-        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> Icons.Outlined.Description
-        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> Icons.Outlined.TableChart
-        "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> Icons.Outlined.Slideshow
-        "application/zip", "application/x-rar-compressed" -> Icons.Outlined.Archive
+        "application/pdf" -> R.drawable.ic_gpt_file_pdf
+        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> R.drawable.ic_gpt_file_document
+        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> R.drawable.ic_gpt_file_spreedsheet
+        "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> R.drawable.ic_gpt_file_powerpoint
+        "application/zip", "application/x-rar-compressed" -> R.drawable.ic_gpt_file_zip
         else -> when {
-            mimeType?.startsWith("video/") == true -> Icons.Outlined.Videocam
-            mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
-            mimeType?.startsWith("image/") == true -> Icons.Outlined.Image
-            else -> Icons.Outlined.AttachFile
+            mimeType?.startsWith("video/") == true -> R.drawable.ic_gpt_file_video
+            mimeType?.startsWith("audio/") == true -> R.drawable.ic_gpt_file_audio
+            mimeType?.startsWith("image/") == true -> R.drawable.ic_gpt_file_image
+            else -> R.drawable.ic_paperclip
         }
     }
 }
@@ -874,7 +863,7 @@ fun MessageContextMenu(
         ) {
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
                 ContextMenuRow(
-                    icon = Icons.Filled.ContentCopy,
+                    icon = R.drawable.ic_copy,
                     label = stringResource(R.string.action_copy),
                     iconBg = iconBg,
                     iconTint = iconTint,
@@ -882,7 +871,7 @@ fun MessageContextMenu(
                     onClick = { onCopy(message) }
                 )
                 ContextMenuRow(
-                    icon = Icons.Filled.Edit,
+                    icon = R.drawable.ic_gpt_edit,
                     label = stringResource(R.string.chat_action_edit),
                     iconBg = iconBg,
                     iconTint = iconTint,
@@ -890,7 +879,7 @@ fun MessageContextMenu(
                     onClick = { onEdit(message) }
                 )
                 ContextMenuRow(
-                    icon = Icons.Filled.Refresh,
+                    icon = R.drawable.ic_regenerate,
                     label = stringResource(R.string.chat_action_regenerate),
                     iconBg = iconBg,
                     iconTint = iconTint,
@@ -949,7 +938,7 @@ fun ImageContextMenu(
        ) {
            Column(modifier = Modifier.padding(vertical = 8.dp)) {
                ContextMenuRow(
-                   icon = Icons.Outlined.Image,
+                   icon = R.drawable.ic_gpt_file_image,
                    label = stringResource(R.string.image_view),
                    iconBg = iconBg,
                    iconTint = iconTint,
@@ -958,7 +947,7 @@ fun ImageContextMenu(
                )
                if (onEdit != null) {
                    ContextMenuRow(
-                       icon = Icons.Filled.Edit,
+                       icon = R.drawable.ic_gpt_edit,
                        label = stringResource(imageContextMenuEditLabelRes()),
                        iconBg = iconBg,
                        iconTint = iconTint,
@@ -967,7 +956,7 @@ fun ImageContextMenu(
                    )
                }
                ContextMenuRow(
-                   icon = Icons.Outlined.Download,
+                   icon = R.drawable.ic_download,
                    label = stringResource(R.string.image_download),
                    iconBg = iconBg,
                    iconTint = iconTint,
@@ -986,7 +975,7 @@ internal fun imageContextMenuEditLabelRes(): Int = R.string.image_edit
 
 @Composable
 private fun ContextMenuRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    @DrawableRes icon: Int,
     label: String,
     iconBg: Color,
     iconTint: Color,
@@ -1007,7 +996,7 @@ private fun ContextMenuRow(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = icon,
+                painter = painterResource(icon),
                 contentDescription = null,
                 tint = iconTint,
                 modifier = Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)

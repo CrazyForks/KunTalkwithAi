@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.voice.ui
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.AnimatedVisibility
@@ -17,15 +19,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -113,7 +106,7 @@ fun VoiceBottomControls(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Default.Mic,
+                painter = painterResource(R.drawable.ic_gpt_mic_outline),
                 contentDescription = stringResource(
                     if (isRecording) R.string.voice_stop_recording else R.string.voice_start_recording
                 ),
@@ -146,11 +139,11 @@ fun VoiceBottomControls(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = when {
-                    isRecording -> Icons.Default.Delete
-                    isPlaying -> Icons.Default.Delete
-                    else -> Icons.Default.Close
-                },
+                painter = painterResource(when {
+                    isRecording -> R.drawable.ic_trash
+                    isPlaying -> R.drawable.ic_stop
+                    else -> R.drawable.ic_close
+                }),
                 contentDescription = when {
                     isRecording -> stringResource(R.string.voice_cancel_recording)
                     isPlaying -> stringResource(R.string.voice_stop_ai_response)
@@ -255,7 +248,7 @@ private fun TtsQuotaWarningCard() {
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(
-                imageVector = Icons.Default.Info,
+                painter = painterResource(R.drawable.ic_info),
                 contentDescription = null,
                 tint = Color.White,
                 modifier = Modifier.size(20.dp)
@@ -346,22 +339,22 @@ fun WebSocketStatusIndicator(
     
     val (icon, text, color) = when (state) {
         VoiceChatSession.WebSocketState.DISCONNECTED -> Triple(
-            Icons.Default.CloudOff,
+            R.drawable.ic_gpt_globe_off,
             stringResource(R.string.voice_connection_disconnected),
             contentColor.copy(alpha = 0.5f)
         )
         VoiceChatSession.WebSocketState.CONNECTING -> Triple(
-            Icons.Default.CloudSync,
+            R.drawable.ic_regenerate,
             stringResource(R.string.voice_connection_connecting),
             Color(0xFFFF9800) // 橙色
         )
         VoiceChatSession.WebSocketState.CONNECTED -> Triple(
-            Icons.Default.Cloud,
+            R.drawable.ic_gpt_weather_cloud,
             stringResource(R.string.voice_connection_connected),
             Color(0xFF4CAF50) // 绿色
         )
         VoiceChatSession.WebSocketState.ERROR -> Triple(
-            Icons.Default.Warning,
+            R.drawable.ic_gpt_warning,
             stringResource(R.string.voice_connection_error),
             Color(0xFFF44336) // 红色
         )
@@ -397,7 +390,7 @@ fun WebSocketStatusIndicator(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
-                imageVector = icon,
+                painter = painterResource(icon),
                 contentDescription = text,
                 modifier = Modifier.size(16.dp),
                 tint = color,

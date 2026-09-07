@@ -22,10 +22,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -63,6 +59,7 @@ internal enum class AgentToggleAction {
 internal enum class ComposerPrimaryAction {
     VOICE,
     SEND,
+    RESTORE,
     PAUSE,
     RESUME,
     // 外观仍是加载圈，但只在等待安全暂停时允许再次点击强停。
@@ -78,9 +75,11 @@ internal fun resolveComposerPrimaryAction(
     isRemoteCancellationPending: Boolean,
     isConvertingLongText: Boolean = false,
     isRunControllable: Boolean = true,
+    canRestoreMessage: Boolean = false,
 ): ComposerPrimaryAction = when {
     isRemoteCancellationPending || isConvertingLongText -> ComposerPrimaryAction.LOADING
     composerMode is ComposerMode.EditingPending -> ComposerPrimaryAction.SEND
+    canRestoreMessage && runState == ChatRunState.Idle -> ComposerPrimaryAction.RESTORE
     hasDraft -> ComposerPrimaryAction.SEND
     // Pending 正在派发但 Run 尚未注册时不能显示一个无法执行的暂停按钮。
     runState != ChatRunState.Idle && !isRunControllable -> ComposerPrimaryAction.LOADING
@@ -173,21 +172,21 @@ fun OptimizedSelectedItemPreview(
         when (mediaItem) {
             is SelectedMediaItem.GenericFile -> {
                 val iconRes = when (mediaItem.mimeType) {
-                    "application/pdf" -> Icons.Outlined.PictureAsPdf
-                    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> Icons.Outlined.Description
-                    "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> Icons.Outlined.TableChart
-                    "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> Icons.Outlined.Slideshow
-                    "application/zip", "application/x-rar-compressed" -> Icons.Outlined.Archive
+                    "application/pdf" -> R.drawable.ic_gpt_file_pdf
+                    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> R.drawable.ic_gpt_file_document
+                    "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> R.drawable.ic_gpt_file_spreedsheet
+                    "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> R.drawable.ic_gpt_file_powerpoint
+                    "application/zip", "application/x-rar-compressed" -> R.drawable.ic_gpt_file_zip
                     else -> when {
-                        mediaItem.mimeType.startsWith("video/") -> Icons.Outlined.Videocam
-                        mediaItem.mimeType.startsWith("audio/") -> Icons.Outlined.Audiotrack
-                        mediaItem.mimeType.startsWith("image/") -> Icons.Outlined.Image
-                        else -> Icons.Outlined.AttachFile
+                        mediaItem.mimeType.startsWith("video/") -> R.drawable.ic_gpt_file_video
+                        mediaItem.mimeType.startsWith("audio/") -> R.drawable.ic_gpt_file_audio
+                        mediaItem.mimeType.startsWith("image/") -> R.drawable.ic_gpt_file_image
+                        else -> R.drawable.ic_paperclip
                     }
                 }
                 iconRes to mediaItem.displayName
             }
-            is SelectedMediaItem.Audio -> Icons.Outlined.Audiotrack to audioLabel
+            is SelectedMediaItem.Audio -> R.drawable.ic_gpt_file_audio to audioLabel
             else -> null to ""
         }
     }
@@ -233,10 +232,11 @@ fun OptimizedSelectedItemPreview(
                     ) {
                         icon?.let {
                             Icon(
-                                imageVector = it,
+                                painter = painterResource(it),
                                 contentDescription = text,
                                 modifier = Modifier.size(32.dp),
-                                tint = MaterialTheme.colorScheme.primary
+                                // 彩色文件图标保留原始配色，其余图标继续跟随主题。
+                                tint = if (it == R.drawable.ic_gpt_file_powerpoint) Color.Unspecified else MaterialTheme.colorScheme.primary
                             )
                         }
                         Spacer(Modifier.height(4.dp))
@@ -260,7 +260,7 @@ fun OptimizedSelectedItemPreview(
                 ) {
                     icon?.let {
                         Icon(
-                            imageVector = it,
+                            painter = painterResource(it),
                             contentDescription = text,
                             modifier = Modifier.size(32.dp),
                             tint = MaterialTheme.colorScheme.primary
@@ -349,7 +349,7 @@ fun OptimizedImageSelectionPanel(
                     ImageSourceOption.CAMERA -> Color(0xff2196F3) // 蓝色
                 }
                 Icon(
-                    imageVector = option.icon,
+                    painter = painterResource(option.icon),
                     contentDescription = stringResource(option.labelRes),
                     tint = iconTint,
                     modifier = Modifier.size(24.dp)
@@ -427,7 +427,7 @@ fun OptimizedMoreOptionsPanel(
                         MoreOptionsType.MCP -> if (isMcpEnabled) Color(0xff9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     }
                     Icon(
-                        imageVector = option.icon,
+                        painter = painterResource(option.icon),
                         contentDescription = stringResource(option.labelRes),
                         tint = iconTint,
                         modifier = Modifier.size(24.dp)

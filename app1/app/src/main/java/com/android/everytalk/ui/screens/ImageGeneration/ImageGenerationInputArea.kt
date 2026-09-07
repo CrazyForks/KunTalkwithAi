@@ -144,7 +144,12 @@ fun ImageGenerationInputArea(
     currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
     onGptImageQualityChanged: ((ImageGenCapabilities.GptImageQuality) -> Unit)? = null,
     onHeightChange: (Int) -> Unit = {},
-    onShowVoiceInput: () -> Unit = {}
+    onShowVoiceInput: () -> Unit = {},
+    restoredDraft: com.android.everytalk.statecontroller.controller.conversation.MessageEditDraft? = null,
+    isRestoringMessage: Boolean = false,
+    messageEditSession: com.android.everytalk.statecontroller.controller.conversation.MessageEditSession? = null,
+    onRestoreOriginalMessages: (String, List<SelectedMediaItem>) -> Unit = { _, _ -> },
+    onRestoredDraftConsumed: (com.android.everytalk.statecontroller.controller.conversation.MessageEditDraft) -> Unit = {},
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -162,6 +167,17 @@ fun ImageGenerationInputArea(
         }
     }
     
+    LaunchedEffect(restoredDraft) {
+        val draft = restoredDraft?.takeIf { it.isImageGeneration } ?: return@LaunchedEffect
+        syncJob?.cancel()
+        localText = draft.message.text
+        lastExternalText = localText
+        onTextChange(localText)
+        onRestoredDraftConsumed(draft)
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
     // 防抖同步到 ViewModel
     LaunchedEffect(localText) {
         syncJob?.cancel()
@@ -336,13 +352,17 @@ fun ImageGenerationInputArea(
         }
     }
 
-    // 🎯 性能优化：发送时使用本地文本
+    val canRestoreMessage = messageEditSession?.matchesDraft(localText, selectedMediaItems) == true
+    // 使用当前草稿和回调，附件增删后立即切换复原/发送，不缓存旧列表。
     val onSendClick =
-        remember(isApiCalling, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
             {
                 try {
-                    if (isApiCalling) {
+                    if (isRestoringMessage) {
+                        // 等待历史事务结束，避免回退期间发送或清空输入。
+                    } else if (isApiCalling) {
                         onStopApiCall()
+                    } else if (canRestoreMessage) {
+                        onRestoreOriginalMessages(localText, selectedMediaItems.toList())
                     } else if (localText.isBlank() && selectedMediaItems.isEmpty()) {
                         onShowVoiceInput()
                     } else if ((localText.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
@@ -368,7 +388,6 @@ fun ImageGenerationInputArea(
                 }
                 Unit
             }
-        }
 
     val isDarkTheme = isSystemInDarkTheme()
     var isFocused by remember { mutableStateOf(false) }
@@ -684,6 +703,7 @@ fun ImageGenerationInputArea(
                         }
 
                         BasicTextField(
+                            readOnly = isRestoringMessage,
                             value = localText,
                             onValueChange = { newText -> localText = newText },
                             modifier = shadowedInputModifier
@@ -728,6 +748,7 @@ fun ImageGenerationInputArea(
                                         Spacer(Modifier.width(8.dp))
                                         val buttonState = when {
                                             isApiCalling -> 2
+                                            canRestoreMessage -> 3
                                             hasContent -> 1
                                             else -> 0
                                         }
@@ -748,6 +769,7 @@ fun ImageGenerationInputArea(
                                         ) { state ->
                                             FilledIconButton(
                                                 onClick = onSendClick,
+                                                enabled = !isRestoringMessage && state == buttonState,
                                                 shape = CircleShape,
                                                 colors = IconButtonDefaults.filledIconButtonColors(
                                                     containerColor = buttonBackgroundColor,
@@ -759,11 +781,13 @@ fun ImageGenerationInputArea(
                                                     painter = when (state) {
                                                         2 -> painterResource(R.drawable.ic_stop)
                                                         1 -> painterResource(R.drawable.ic_arrow_up)
+                                                        3 -> painterResource(R.drawable.ic_gpt_undo)
                                                         else -> painterResource(R.drawable.ic_voice_bold)
                                                     },
                                                     contentDescription = when (state) {
                                                         2 -> stringResource(R.string.chat_input_stop)
                                                         1 -> stringResource(R.string.chat_input_send)
+                                                        3 -> stringResource(R.string.chat_input_restore_message)
                                                         else -> stringResource(R.string.chat_input_voice)
                                                     },
                                                     modifier = Modifier.size(20.dp)

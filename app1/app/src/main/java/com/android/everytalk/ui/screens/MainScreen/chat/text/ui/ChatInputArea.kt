@@ -42,12 +42,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Inventory2
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
@@ -127,6 +121,7 @@ import com.android.everytalk.data.agent.PendingSkillSecretApproval
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.SkillTagVisualTransformation
 import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.buildSkillContentParts
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.restoreSkillEditor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.displaySkillEditorText
 import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.findSkillSlashQuery
 import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.insertSkillReference
@@ -453,6 +448,7 @@ fun ChatInputArea(
         mutableStateOf(TextFieldValue(text, TextRange(text.length)))
     }
     var skillReferences by remember { mutableStateOf<List<MessageSkillReference>>(emptyList()) }
+    var restoredAttachmentIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isConvertingLongText by remember { mutableStateOf(false) }
     
     // 防抖同步 Job，用于取消上一次未完成的同步
@@ -477,6 +473,23 @@ fun ChatInputArea(
         }
     }
     
+    val restoredDraft by viewModel.restoredMessageDraft.collectAsState()
+    val isRestoringMessage by viewModel.isRestoringMessage.collectAsState()
+    val messageEditSession by viewModel.messageEditSession.collectAsState()
+    LaunchedEffect(restoredDraft) {
+        val draft = restoredDraft?.takeUnless { it.isImageGeneration } ?: return@LaunchedEffect
+        syncJob?.cancel()
+        val restored = restoreSkillEditor(draft.message.text, draft.message.contentParts)
+        localTextFieldValue = restored.value
+        skillReferences = restored.references
+        restoredAttachmentIds = restoredAttachmentIds + draft.message.attachments.map { it.id }
+        lastExternalText = restored.value.text
+        onTextChange(restored.value.text)
+        viewModel.consumeRestoredMessageDraft(draft)
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
     // 防抖同步到 ViewModel（使用 PerformanceConfig 中定义的延迟）
     val localText = localTextFieldValue.text
     val slashQuery = findSkillSlashQuery(localTextFieldValue)
@@ -519,8 +532,10 @@ fun ChatInputArea(
     BackHandler(enabled = activeSlashQuery != null) {
         dismissedSlashQueryStart = slashQuery?.start
     }
-    LaunchedEffect(localText) {
-        if (localText.length < LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS) {
+    LaunchedEffect(localText, messageEditSession) {
+        // 编辑历史时保持原文可逆，不把回填的长文本自动改成文件，避免未动内容却失去复原按钮。
+        val editingHistory = messageEditSession?.belongsTo(currentConversationId, false) == true
+        if (editingHistory || localText.length < LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS) {
             isConvertingLongText = false
             return@LaunchedEffect
         }
@@ -598,6 +613,8 @@ fun ChatInputArea(
     fun deleteDraftTextAttachments(items: List<SelectedMediaItem>) {
         val paths = items.mapNotNull { item ->
             (item as? SelectedMediaItem.GenericFile)
+                // 历史附件可能仍被先前消息或 Agent 记录引用；从输入框移除时不能删除源文件。
+                ?.takeUnless { it.id in restoredAttachmentIds }
                 ?.takeIf { it.displayName.startsWith("pasted-text-") }
                 ?.filePath
                 ?.takeIf { File(it).name.startsWith("pasted_text_") }
@@ -632,22 +649,29 @@ fun ChatInputArea(
 
     // 图标和点击共用同一事实；空白不是草稿，不能显示发送却执行暂停或打开语音。
     val hasContent = localText.isNotBlank() || selectedMediaItems.isNotEmpty()
+    val canRestoreMessage = messageEditSession?.takeIf {
+        it.belongsTo(currentConversationId, false)
+    }?.matchesDraft(displaySkillEditorText(localText, skillReferences), selectedMediaItems, buildSkillContentParts(localText, skillReferences)) == true
     val primaryAction = resolveComposerPrimaryAction(
         runState = chatRunState,
         composerMode = composerMode,
         hasDraft = hasContent,
         isRemoteCancellationPending = isRemoteCancellationPending,
-        isConvertingLongText = isConvertingLongText,
+        isConvertingLongText = isConvertingLongText || isRestoringMessage,
         isRunControllable = runControlState != null,
+        canRestoreMessage = canRestoreMessage,
     )
     // 不缓存捕获 Skill 引用和回调的闭包，使用本次重组的最新草稿。
-    val onSendClick: () -> Unit = {
+    val onSendClick: () -> Unit = send@{
+        if (viewModel.isRestoringMessage.value) return@send
         try {
             val hasDraft = hasContent
             val contentParts = buildSkillContentParts(localText, skillReferences)
             val displayText = displaySkillEditorText(localText, skillReferences)
             if (primaryAction == ComposerPrimaryAction.LOADING) {
                 // 转换、Run 注册或强停处理中不可重复操作。
+            } else if (primaryAction == ComposerPrimaryAction.RESTORE) {
+                viewModel.restoreOriginalMessages(displayText, selectedMediaItems.toList(), contentParts)
             } else if (primaryAction == ComposerPrimaryAction.FORCE_STOP) {
                 viewModel.forceStopPendingPause(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.PAUSE) {
@@ -1229,6 +1253,7 @@ fun ChatInputArea(
                         }
 
                         BasicTextField(
+                            readOnly = isRestoringMessage,
                             value = localTextFieldValue,
                             onValueChange = { newValue ->
                                 val next = normalizeSkillEdit(localTextFieldValue, newValue, skillReferences)
@@ -1441,12 +1466,14 @@ fun ChatInputArea(
                                                         ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_pause)
                                                         ComposerPrimaryAction.RESUME -> painterResource(R.drawable.ic_gpt_play)
                                                         ComposerPrimaryAction.SEND -> painterResource(R.drawable.ic_arrow_up)
+                                                        ComposerPrimaryAction.RESTORE -> painterResource(R.drawable.ic_gpt_undo)
                                                         else -> painterResource(R.drawable.ic_voice_bold)
                                                     },
                                                     contentDescription = when (state) {
                                                         ComposerPrimaryAction.PAUSE -> stringResource(R.string.chat_input_pause)
                                                         ComposerPrimaryAction.RESUME -> stringResource(R.string.chat_input_resume)
                                                         ComposerPrimaryAction.SEND -> stringResource(R.string.chat_input_send)
+                                                        ComposerPrimaryAction.RESTORE -> stringResource(R.string.chat_input_restore_message)
                                                         else -> stringResource(R.string.chat_input_voice)
                                                     },
                                                     modifier = Modifier.size(20.dp)
@@ -1785,7 +1812,7 @@ private fun SkillCatalogSuggestionRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = Icons.Outlined.Inventory2,
+            painter = painterResource(R.drawable.ic_gpt_archive),
             contentDescription = null,
             tint = secondaryTextColor,
             modifier = Modifier.size(17.dp),
@@ -1831,7 +1858,7 @@ private fun EmptySkillSlashRow() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = Icons.Outlined.Inventory2,
+            painter = painterResource(R.drawable.ic_gpt_archive),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
             modifier = Modifier.size(17.dp),

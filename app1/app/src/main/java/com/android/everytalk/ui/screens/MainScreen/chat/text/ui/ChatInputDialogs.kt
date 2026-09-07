@@ -42,16 +42,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.draw.shadow
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R

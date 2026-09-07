@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.voice.ui
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import android.Manifest
@@ -11,13 +13,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.RecordVoiceOver
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Upload
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -170,7 +165,7 @@ fun VoiceInputScreen(
                         enabled = viewModel != null
                     ) {
                         Icon(
-                            Icons.Default.RecordVoiceOver,
+                            painterResource(R.drawable.gpt_voice),
                             contentDescription = stringResource(R.string.voice_select_voice),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
@@ -183,7 +178,7 @@ fun VoiceInputScreen(
                         enabled = viewModel != null
                     ) {
                         Icon(
-                            Icons.Default.Build,
+                            painterResource(R.drawable.ic_gpt_wrench),
                             contentDescription = stringResource(R.string.voice_stt_configuration),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
@@ -193,7 +188,7 @@ fun VoiceInputScreen(
                         enabled = viewModel != null
                     ) {
                         Icon(
-                            Icons.Default.Face,
+                            painterResource(R.drawable.ic_gpt_simple_smile),
                             contentDescription = stringResource(R.string.voice_llm_configuration),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
@@ -203,7 +198,7 @@ fun VoiceInputScreen(
                         enabled = viewModel != null
                     ) {
                         Icon(
-                            Icons.Default.Settings,
+                            painterResource(R.drawable.gpt_settings),
                             contentDescription = stringResource(R.string.voice_tts_configuration),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )

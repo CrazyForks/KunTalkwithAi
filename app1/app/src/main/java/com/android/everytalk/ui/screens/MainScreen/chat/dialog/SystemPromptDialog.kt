@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.dialog
+
+import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.animateColorAsState
@@ -23,9 +25,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -181,7 +180,7 @@ fun SystemPromptDialog(
                             },
                         ) {
                             Icon(
-                                imageVector = Icons.Outlined.Delete,
+                                painter = painterResource(R.drawable.ic_trash),
                                 contentDescription = stringResource(R.string.action_clear),
                                 tint = subtextColor,
                             )
@@ -284,7 +283,7 @@ fun SystemPromptDialog(
                     ) {
                         if (isEngaged) {
                             Icon(
-                                imageVector = Icons.Filled.Pause,
+                                painter = painterResource(R.drawable.ic_pause),
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
                             )
